@@ -1,5 +1,6 @@
 import {
   normalizeHTTPURL,
+  normalizeRequestHeaders,
   REQUEST_CONTEXT_SOURCE_DOCUMENT,
   REQUEST_CONTEXT_SOURCE_INITIATOR,
   REQUEST_CONTEXT_SOURCE_ORIGIN,
@@ -48,6 +49,16 @@ export function requestContextFromDetails(details) {
     }
   }
   return null;
+}
+
+/**
+ * Extract only the safe request headers needed to replay a playlist request.
+ * The allow-list lives in model.js and deliberately ignores Cookie and
+ * Authorization even when webRequest exposes them in requestHeaders.
+ */
+export function requestHeadersFromDetails(details) {
+  if (!details || typeof details !== 'object') return null;
+  return normalizeRequestHeaders(details.requestHeaders);
 }
 
 function contentTypeFromHeaders(responseHeaders = []) {

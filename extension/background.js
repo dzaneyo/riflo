@@ -1,9 +1,16 @@
-import { detectHLS, detectHLSRequest, requestContextFromDetails } from './detector.js';
+import {
+  detectHLS,
+  detectHLSRequest,
+  requestContextFromDetails,
+  requestHeadersFromDetails,
+} from './detector.js';
 import { createCandidate } from './model.js';
 import { createCandidateStore } from './store.js';
 import { extensionAPI } from './api.js';
+import { createRequestHeadersStore } from './request-headers.js';
 
 const store = createCandidateStore(extensionAPI.storage.session);
+const requestHeadersStore = createRequestHeadersStore(extensionAPI.storage.session);
 
 function updateBadge(tabId, count) {
   if (!Number.isInteger(tabId) || tabId < 0) return Promise.resolve();
@@ -13,14 +20,16 @@ function updateBadge(tabId, count) {
   });
 }
 
-async function recordCandidate(details, detector = detectHLS) {
+async function recordCandidate(details, detector = detectHLS, capturedHeaders = null) {
   const detected = detector(details);
   if (!detected) return;
 
+  const requestHeaders = capturedHeaders || requestHeadersFromDetails(details);
   const candidate = createCandidate(detected.url, Date.now(), {
     contentType: detected.contentType,
     detectionSources: detected.detectionSources,
     requestContext: requestContextFromDetails(details),
+    requestHeaders,
   });
   try {
     const candidates = await store.add(details.tabId, candidate);
@@ -41,15 +50,75 @@ extensionAPI.webRequest.onBeforeRequest.addListener(
   },
 );
 
+const mediaRequestFilter = {
+  urls: ['http://*/*', 'https://*/*'],
+  types: ['media', 'xmlhttprequest', 'other'],
+};
+
+function captureSafeRequestHeaders(details) {
+  // At request time there are no response headers to identify an
+  // extensionless playlist. Restrict the session association to explicit
+  // .m3u8 requests so normal media segments and XHRs do not cause session
+  // storage churn.
+  if (!detectHLSRequest(details)) return;
+  const headers = requestHeadersFromDetails(details);
+  if (!headers) return;
+  void requestHeadersStore.remember(details, headers).catch(() => undefined);
+  void recordCandidate(details, detectHLSRequest, headers);
+}
+
+// Chromium hides Referer and some CORS-sensitive headers unless extraHeaders
+// is requested. Firefox does not consistently accept that Chromium-specific
+// option, so register with a safe fallback. Neither path is blocking and the
+// callback still keeps only the explicit allow-list.
+try {
+  extensionAPI.webRequest.onBeforeSendHeaders.addListener(
+    captureSafeRequestHeaders,
+    mediaRequestFilter,
+    ['requestHeaders', 'extraHeaders'],
+  );
+} catch {
+  extensionAPI.webRequest.onBeforeSendHeaders.addListener(
+    captureSafeRequestHeaders,
+    mediaRequestFilter,
+    ['requestHeaders'],
+  );
+}
+
 extensionAPI.webRequest.onHeadersReceived.addListener(
   (details) => {
-    void recordCandidate(details, detectHLS);
+    const detected = detectHLS(details);
+    if (!detected) return;
+    void requestHeadersStore.consume(details)
+      .catch(() => null)
+      .then((headers) => recordCandidate(details, () => detected, headers));
   },
   {
     urls: ['http://*/*', 'https://*/*'],
     types: ['media', 'xmlhttprequest', 'other'],
   },
   ['responseHeaders'],
+);
+
+function discardRequestHeaders(details) {
+  if (!detectHLSRequest(details)) return;
+  void requestHeadersStore.remove(details).catch(() => undefined);
+}
+
+extensionAPI.webRequest.onCompleted.addListener(
+  discardRequestHeaders,
+  {
+    urls: ['http://*/*', 'https://*/*'],
+    types: ['media', 'xmlhttprequest', 'other'],
+  },
+);
+
+extensionAPI.webRequest.onErrorOccurred.addListener(
+  discardRequestHeaders,
+  {
+    urls: ['http://*/*', 'https://*/*'],
+    types: ['media', 'xmlhttprequest', 'other'],
+  },
 );
 
 extensionAPI.tabs.onRemoved.addListener((tabId) => {

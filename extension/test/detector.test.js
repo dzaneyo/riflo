@@ -8,6 +8,7 @@ import {
   isHLSContentType,
   isMediaSegmentURL,
   requestContextFromDetails,
+  requestHeadersFromDetails,
 } from '../detector.js';
 import {
   REQUEST_CONTEXT_SOURCE_DOCUMENT,
@@ -117,4 +118,34 @@ test('does not extract non-http request context values', () => {
     origin: 'null',
   }), null);
   assert.equal(requestContextFromDetails(null), null);
+});
+
+test('captures only safe replay headers and never stores Cookie or Authorization', () => {
+  const headers = requestHeadersFromDetails({
+    requestHeaders: [
+      { name: 'Referer', value: 'https://user:secret@site.example.test/watch?id=7#player' },
+      { name: 'Origin', value: 'https://site.example.test/' },
+      { name: 'User-Agent', value: 'riflo-test-agent/1.0' },
+      { name: 'Cookie', value: 'session=secret' },
+      { name: 'Authorization', value: 'Bearer secret' },
+      { name: 'X-Private', value: 'do-not-copy' },
+    ],
+  });
+
+  assert.deepEqual(headers, {
+    referer: 'https://site.example.test/watch?id=7',
+    origin: 'https://site.example.test',
+    user_agent: 'riflo-test-agent/1.0',
+  });
+  assert.equal(Object.hasOwn(headers, 'cookie'), false);
+  assert.equal(Object.hasOwn(headers, 'authorization'), false);
+});
+
+test('rejects unsafe captured header values', () => {
+  assert.equal(requestHeadersFromDetails({
+    requestHeaders: [{ name: 'Origin', value: 'javascript:alert(1)' }],
+  }), null);
+  assert.equal(requestHeadersFromDetails({
+    requestHeaders: [{ name: 'User-Agent', value: 'safe\r\nInjected: yes' }],
+  }), null);
 });

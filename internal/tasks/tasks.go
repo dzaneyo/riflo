@@ -251,7 +251,10 @@ func (s *Service) Inspect(ctx context.Context, req app.InspectRequest) (app.Medi
 	if err := validateURL(req.URL); err != nil {
 		return app.MediaInfo{}, err
 	}
-	if err := validateHeaders(req.Referer, req.UserAgent, req.Cookie); err != nil {
+	if err := validateHeaders(req.Referer, req.Origin, req.UserAgent, req.Cookie); err != nil {
+		return app.MediaInfo{}, err
+	}
+	if err := validateOrigin(req.Origin); err != nil {
 		return app.MediaInfo{}, err
 	}
 	s.mu.Lock()
@@ -262,7 +265,7 @@ func (s *Service) Inspect(ctx context.Context, req app.InspectRequest) (app.Medi
 	}
 	info, err := s.runner.Inspect(ctx, req)
 	if err != nil {
-		return app.MediaInfo{}, mapMediaError("inspect", err, req.URL, req.Referer, req.UserAgent, req.Cookie)
+		return app.MediaInfo{}, mapMediaError("inspect", err, req.URL, req.Referer, req.Origin, req.UserAgent, req.Cookie)
 	}
 	// The request is the source of truth for the display value. This avoids
 	// trusting an arbitrary runner implementation to echo a credential-bearing
@@ -285,12 +288,18 @@ func (s *Service) CreateTask(ctx context.Context, req app.CreateTaskRequest) (ap
 	if err != nil {
 		return app.Task{}, err
 	}
-	if err := validateHeaders(req.Referer, req.UserAgent, req.Cookie); err != nil {
+	if err := validateHeaders(req.Referer, req.Origin, req.UserAgent, req.Cookie); err != nil {
+		return app.Task{}, err
+	}
+	if err := validateOrigin(req.Origin); err != nil {
 		return app.Task{}, err
 	}
 	format, err := normalizeFormat(req.Format)
 	if err != nil {
 		return app.Task{}, err
+	}
+	if req.HLSVariantIndex != nil && *req.HLSVariantIndex < 0 {
+		return app.Task{}, app.Invalid("hls variant index must be non-negative")
 	}
 	outputDir, err := normalizeOutputDir(req.OutputDir)
 	if err != nil {
@@ -377,7 +386,7 @@ func (s *Service) execute(item *queuedTask, runCtx context.Context, runCancel co
 		progress.task.ErrorCode = ""
 		progress.task.ErrorMessage = ""
 	} else {
-		mapped := mapMediaError("download", downloadErr, item.req.URL, item.req.Referer, item.req.UserAgent, item.req.Cookie)
+		mapped := mapMediaError("download", downloadErr, item.req.URL, item.req.Referer, item.req.Origin, item.req.UserAgent, item.req.Cookie)
 		progress.task.Status = app.TaskFailed
 		progress.task.ErrorCode = mapped.Code
 		progress.task.ErrorMessage = boundedMessage(mapped.Message)
@@ -397,7 +406,7 @@ func (s *Service) finishFailed(task app.Task, err error, req app.CreateTaskReque
 	task.Status = app.TaskFailed
 	mapped := mapStoreError("run task", err)
 	task.ErrorCode = mapped.Code
-	task.ErrorMessage = boundedMessage(redactError(mapped.Message, req.URL, req.Referer, req.UserAgent, req.Cookie))
+	task.ErrorMessage = boundedMessage(redactError(mapped.Message, req.URL, req.Referer, req.Origin, req.UserAgent, req.Cookie))
 	finish := time.Now().UTC()
 	task.FinishedAt = &finish
 	task.UpdatedAt = finish
@@ -616,6 +625,20 @@ func validateHeaders(values ...string) error {
 	return nil
 }
 
+func validateOrigin(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "null" {
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed == nil || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return app.Invalid("origin must be an HTTP origin")
+	}
+	return nil
+}
+
 func normalizeOutputDir(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -678,6 +701,27 @@ func mapMediaError(operation string, err error, secrets ...string) *app.Error {
 	}
 	if errors.Is(err, media.ErrAccessDenied) {
 		return app.NewError("media_access_denied", "media server denied access; try adding Referer or Cookie", 502)
+	}
+	if errors.Is(err, media.ErrRateLimited) {
+		return app.NewError("media_rate_limited", "media server is rate limited; try again later", 429)
+	}
+	if errors.Is(err, media.ErrTimeout) {
+		return app.NewError("media_timeout", "media request timed out", 504)
+	}
+	if errors.Is(err, media.ErrNetwork) {
+		return app.NewError("media_network_error", "media network request failed", 502)
+	}
+	if errors.Is(err, media.ErrHTTPStatus) {
+		return app.NewError("media_http_error", "media server returned an HTTP error", 502)
+	}
+	if errors.Is(err, media.ErrInvalidPlaylist) {
+		return app.NewError("hls_invalid_playlist", "media playlist is invalid", 422)
+	}
+	if errors.Is(err, media.ErrVariantUnavailable) {
+		return app.NewError("hls_variant_unavailable", "the selected HLS quality is unavailable", 422)
+	}
+	if errors.Is(err, media.ErrURLExpired) {
+		return app.NewError("media_url_expired", "the media URL is unavailable or may have expired", 410)
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return app.NewError("canceled", "operation canceled", 408)

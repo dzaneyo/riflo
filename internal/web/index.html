@@ -95,6 +95,11 @@
       .stream-table th { background: #f7f9fb; color: var(--muted); font-size: .78rem; font-weight: 620; }
       .stream-table tr:last-child td { border-bottom: 0; }
       .variant-table { min-width: 32rem; }
+      .variant-picker { margin: .75rem 0 0; padding: .7rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: #fbfcfd; }
+      .variant-picker legend { padding: 0 .25rem; color: #2d3b48; font-size: .86rem; font-weight: 620; }
+      .variant-choice { display: inline-flex; align-items: center; gap: .4rem; margin: .15rem .9rem .15rem 0; color: #2b3742; font-size: .84rem; font-weight: 500; }
+      .variant-choice input { width: auto; min-height: 0; margin: 0; }
+      .variant-choice-note { margin: .45rem 0 0; color: var(--muted); font-size: .78rem; }
       .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
       .task-toolbar { align-items: center; }
@@ -194,6 +199,11 @@
                 </div>
 
                 <div class="field">
+                  <label for="origin">Origin</label>
+                  <input id="origin" type="url" inputmode="url" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+                </div>
+
+                <div class="field">
                   <label for="userAgent">User-Agent</label>
                   <input id="userAgent" type="text" placeholder="留空使用默认值" autocomplete="off" spellcheck="false">
                 </div>
@@ -203,7 +213,7 @@
                   <input id="cookie" type="password" placeholder="仅在本次请求使用" autocomplete="new-password" spellcheck="false">
                 </div>
 
-                <p class="details-note">Referer、User-Agent 和 Cookie 只在本次检查或下载请求的内存中使用，不会写入任务历史或页面存储。任务创建成功后会立即清空。</p>
+                <p class="details-note">Referer、Origin、User-Agent 和 Cookie 只在本次检查或下载请求的内存中使用，不会写入任务历史或页面存储。任务创建成功后会立即清空。</p>
               </div>
             </details>
 
@@ -255,8 +265,11 @@
         'use strict';
 
         var ACTIVE_STATUSES = { queued: true, running: true };
+        var RETRYABLE_STATUSES = { failed: true, interrupted: true };
         var HANDOFF_SOURCE_LIMIT = 64 * 1024;
         var HANDOFF_REFERER_LIMIT = 8 * 1024;
+        var HANDOFF_ORIGIN_LIMIT = 4 * 1024;
+        var HANDOFF_USER_AGENT_LIMIT = 4 * 1024;
         var STATUS_LABELS = {
           queued: '排队中',
           running: '下载中',
@@ -275,17 +288,41 @@
           ffprobe_unavailable: '找不到 ffprobe，请先运行 riflo doctor。',
           media_unavailable: '无法读取媒体，请检查地址和访问权限。',
           media_access_denied: '媒体服务器拒绝访问，请检查页面 Referer；如果需要登录，请在“高级请求信息”中手工补充 Cookie。Cookie 只在本次请求使用，不会保存。',
+          media_rate_limited: '媒体服务器暂时限制了请求，请稍后重试或降低请求频率。',
+          rate_limited: '媒体服务器暂时限制了请求，请稍后重试或降低请求频率。',
+          media_timeout: '媒体请求超时，请检查网络后重试。',
+          timeout: '媒体请求超时，请检查网络后重试。',
+          media_network_error: '媒体网络请求失败，请检查网络后重试。',
+          network: '媒体网络请求失败，请检查网络后重试。',
+          media_http_error: '媒体服务器返回了 HTTP 错误，请稍后重试。',
+          http: '媒体服务器返回了 HTTP 错误，请稍后重试。',
+          media_url_expired: '媒体地址可能已经过期，请回到视频页重新播放并重新获取地址。',
+          hls_invalid_playlist: 'HLS 播放列表无效或已失效，请重新获取媒体地址。',
+          invalid_playlist: 'HLS 播放列表无效或已失效，请重新获取媒体地址。',
+          hls_variant_unavailable: '选择的画质已不可用，请重新检查媒体并选择“自动”。',
+          variant_unavailable: '选择的画质已不可用，请重新检查媒体并选择“自动”。',
+          invalid_output: '输出目录或文件名无效，请检查保存设置。',
+          output_exists: '输出文件已经存在，请更换文件名或目录。',
+          media_tool_unavailable: '找不到 ffmpeg 或 ffprobe，请先运行 riflo doctor。',
+          ffmpeg_failed: 'ffmpeg 处理失败，请检查媒体格式或重试。',
           unauthorized: '媒体服务器要求身份验证，请检查或补充 Referer 或 Cookie。',
           forbidden: '媒体服务器拒绝访问，请检查或补充 Referer 或 Cookie。',
           media_unauthorized: '媒体服务器要求身份验证，请检查或补充 Referer 或 Cookie。',
           media_forbidden: '媒体服务器拒绝访问，请检查或补充 Referer 或 Cookie。',
           http_401: '媒体服务器要求身份验证，请检查或补充 Referer 或 Cookie。',
           http_403: '媒体服务器拒绝访问，请检查或补充 Referer 或 Cookie。',
+          http_429: '媒体服务器暂时限制了请求，请稍后重试或降低请求频率。',
+          http_408: '媒体请求超时，请检查网络后重试。',
+          http_500: '媒体服务器暂时不可用，请稍后重试。',
+          http_502: '媒体服务器网关暂时不可用，请稍后重试。',
+          http_503: '媒体服务器暂时不可用，请稍后重试。',
+          http_504: '媒体服务器网关请求超时，请稍后重试。',
           canceled: '任务已取消。'
         };
 
         var mediaUrl = document.getElementById('mediaUrl');
         var referer = document.getElementById('referer');
+        var origin = document.getElementById('origin');
         var userAgent = document.getElementById('userAgent');
         var cookie = document.getElementById('cookie');
         var outputDir = document.getElementById('outputDir');
@@ -311,6 +348,12 @@
         var healthRequestInFlight = false;
         var formRequestInFlight = false;
         var pollTimer = 0;
+        var inspectedMediaURL = '';
+        var inspectedVariantIndexes = [];
+        // This map deliberately lives only in this page's JavaScript heap. It
+        // is cleared when a task reaches a terminal success/cancel state, and
+        // disappears automatically when the page is refreshed or closed.
+        var transientTaskRequests = Object.create(null);
 
         function createElement(tag, className, text) {
           var element = document.createElement(tag);
@@ -357,6 +400,16 @@
           if (ERROR_LABELS[error.code]) {
             return ERROR_LABELS[error.code];
           }
+          var status = Number(error.status);
+          if (status === 429) {
+            return ERROR_LABELS.http_429;
+          }
+          if (status === 408) {
+            return ERROR_LABELS.http_408;
+          }
+          if (status >= 500 && status <= 599) {
+            return '本地服务或媒体服务器暂时不可用，请稍后重试。';
+          }
           var message = redactError(error.message);
           return message || '请求失败，请稍后重试。';
         }
@@ -390,7 +443,7 @@
               return '[地址已隐藏]';
             }
           });
-          message = message.replace(/\b(cookie|authorization|proxy-authorization|referer|user-agent)\s*[:=]\s*[^\r\n;,]+/gi, '$1: [已隐藏]');
+          message = message.replace(/\b(cookie|authorization|proxy-authorization|referer|origin|user-agent)\s*[:=]\s*[^\r\n;,]+/gi, '$1: [已隐藏]');
           message = message.replace(/\b(token|signature|sig|auth|key|session|password|passwd)(?:[_-]?(?:token|id))?\s*=\s*[^&\s;,]+/gi, '$1=[已隐藏]');
           message = message.replace(/[\r\n\t]+/g, ' ').trim();
           if (message.length > 240) {
@@ -441,6 +494,7 @@
           return {
             url: mediaUrl.value.trim(),
             referer: referer.value.trim(),
+            origin: origin.value.trim(),
             user_agent: userAgent.value.trim(),
             cookie: cookie.value
           };
@@ -451,7 +505,23 @@
           request.output_dir = outputDir.value.trim();
           request.output_name = outputName.value.trim();
           request.format = format.value;
+          request.hls_variant_index = selectedVariantIndex();
           return request;
+        }
+
+        function selectedVariantIndex() {
+          if (inspectedMediaURL !== mediaUrl.value.trim()) {
+            return null;
+          }
+          var selected = inspectResult.querySelector('input[name="hlsVariantIndex"]:checked');
+          if (!selected || selected.value === 'auto') {
+            return null;
+          }
+          var index = Number(selected.value);
+          if (!Number.isInteger(index) || inspectedVariantIndexes.indexOf(index) < 0) {
+            return null;
+          }
+          return index;
         }
 
         function validateURL() {
@@ -475,8 +545,13 @@
         function clearSensitiveInputs() {
           mediaUrl.value = '';
           referer.value = '';
+          origin.value = '';
           userAgent.value = '';
           cookie.value = '';
+          inspectedMediaURL = '';
+          inspectedVariantIndexes = [];
+          inspectPanel.hidden = true;
+          inspectResult.replaceChildren();
         }
 
         function utf8ByteLength(value) {
@@ -509,6 +584,36 @@
           return candidate;
         }
 
+        function validHTTPOrigin(value, maxBytes) {
+          if (value === 'null') {
+            return value;
+          }
+          var candidate = validHTTPURL(value, maxBytes);
+          if (!candidate) {
+            return '';
+          }
+          try {
+            var parsed = new URL(candidate);
+            if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+              return '';
+            }
+            return parsed.origin;
+          } catch (error) {
+            return '';
+          }
+        }
+
+        function validHeaderValue(value, maxBytes) {
+          if (typeof value !== 'string' || !value || utf8ByteLength(value) > maxBytes) {
+            return '';
+          }
+          var candidate = value.trim();
+          if (!candidate || utf8ByteLength(candidate) > maxBytes || /[\r\n]/.test(candidate)) {
+            return '';
+          }
+          return candidate;
+        }
+
         function clearFragment() {
           window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
         }
@@ -529,12 +634,19 @@
             return;
           }
 
+          // Remove the handoff before touching any values so a reload or
+          // navigation cannot replay the signed candidate from the hash.
+          clearFragment();
+
           var source = validHTTPURL(params.get('source') || '', HANDOFF_SOURCE_LIMIT);
           var incomingReferer = params.get('referer') || '';
           var handoffReferer = incomingReferer ? validHTTPURL(incomingReferer, HANDOFF_REFERER_LIMIT) : '';
-          clearFragment();
+          var incomingOrigin = params.get('origin') || '';
+          var handoffOrigin = incomingOrigin ? validHTTPOrigin(incomingOrigin, HANDOFF_ORIGIN_LIMIT) : '';
+          var incomingUserAgent = params.get('user_agent') || '';
+          var handoffUserAgent = incomingUserAgent ? validHeaderValue(incomingUserAgent, HANDOFF_USER_AGENT_LIMIT) : '';
 
-          if (!source || (incomingReferer && !handoffReferer)) {
+          if (!source || (incomingReferer && !handoffReferer) || (incomingOrigin && !handoffOrigin) || (incomingUserAgent && !handoffUserAgent)) {
             setMessage(globalMessage, '扩展候选无效或过长，已忽略。', 'error');
             return;
           }
@@ -542,6 +654,12 @@
           mediaUrl.value = source;
           if (handoffReferer) {
             referer.value = handoffReferer;
+          }
+          if (handoffOrigin) {
+            origin.value = handoffOrigin;
+          }
+          if (handoffUserAgent) {
+            userAgent.value = handoffUserAgent;
           }
           setMessage(globalMessage, '已从扩展接收候选，请确认后检查或下载。', 'success');
         }
@@ -742,24 +860,78 @@
           return Array.isArray(values) ? values : [];
         }
 
+        function variantIndex(variant, fallback) {
+          if (!isObject(variant)) {
+            return null;
+          }
+          var value = Number(variant.index);
+          if (Number.isInteger(value) && value >= 0) {
+            return value;
+          }
+          return Number.isInteger(fallback) && fallback >= 0 ? fallback : null;
+        }
+
+        function variantLabel(variant, index) {
+          var resolution = formatResolution(variant);
+          if (resolution !== '未知') {
+            return resolution;
+          }
+          return '画质 ' + String(index + 1);
+        }
+
         function renderVariantTable(parent, variants) {
           if (!variants.length) {
             return;
           }
+          var validVariants = [];
+          variants.forEach(function (variant, position) {
+            var index = variantIndex(variant, position);
+            if (!isObject(variant) || index === null || inspectedVariantIndexes.indexOf(index) >= 0) {
+              return;
+            }
+            inspectedVariantIndexes.push(index);
+            validVariants.push({ variant: variant, index: index, position: position });
+          });
+          if (!validVariants.length) {
+            return;
+          }
+
+          var picker = createElement('fieldset', 'variant-picker');
+          picker.appendChild(createElement('legend', '', '下载画质'));
+          var automatic = createElement('label', 'variant-choice');
+          var automaticInput = document.createElement('input');
+          automaticInput.type = 'radio';
+          automaticInput.name = 'hlsVariantIndex';
+          automaticInput.value = 'auto';
+          automaticInput.checked = true;
+          automatic.appendChild(automaticInput);
+          automatic.appendChild(createElement('span', '', '自动（最佳可用流）'));
+          picker.appendChild(automatic);
+          picker.appendChild(createElement('p', 'variant-choice-note', '选择具体画质后，任务会把对应的 variant index 交给服务端；签名地址仍不会显示或保存。'));
+          parent.appendChild(picker);
+
           var tableWrap = createElement('div', 'stream-table-wrap');
           var table = createElement('table', 'stream-table variant-table');
           table.appendChild(createElement('caption', 'sr-only', 'HLS 可用画质'));
           var head = createElement('thead');
           var headRow = createElement('tr');
-          ['分辨率', '带宽', '编码'].forEach(function (label) { headRow.appendChild(createElement('th', '', label)); });
+          ['选择', '分辨率', '带宽', '编码'].forEach(function (label) { headRow.appendChild(createElement('th', '', label)); });
           head.appendChild(headRow);
           table.appendChild(head);
           var body = createElement('tbody');
-          variants.forEach(function (variant) {
-            if (!isObject(variant)) {
-              return;
-            }
+          validVariants.forEach(function (entry) {
+            var variant = entry.variant;
             var row = createElement('tr');
+            var choiceCell = createElement('td');
+            var choice = createElement('label', 'variant-choice');
+            var choiceInput = document.createElement('input');
+            choiceInput.type = 'radio';
+            choiceInput.name = 'hlsVariantIndex';
+            choiceInput.value = String(entry.index);
+            choiceInput.setAttribute('aria-label', '选择 ' + variantLabel(variant, entry.position));
+            choice.appendChild(choiceInput);
+            choiceCell.appendChild(choice);
+            row.appendChild(choiceCell);
             row.appendChild(createElement('td', '', formatResolution(variant)));
             row.appendChild(createElement('td', '', formatBandwidth(firstValue(variant.bandwidth, variant.bandwidth_bps, variant.average_bandwidth, variant.averageBandwidth))));
             row.appendChild(createElement('td', '', firstValue(variant.codecs, variant.codec, variant.video_codec, variant.videoCodec) || '—'));
@@ -858,13 +1030,15 @@
           parent.appendChild(summaryGrid);
           renderVariantTable(parent, variants);
           if (variants.length > 1) {
-            parent.appendChild(createElement('p', 'inspect-note', '检测到多档画质；当前下载使用 FFmpeg 的默认最佳可用流策略，Web UI 暂不单独选择画质。'));
+            parent.appendChild(createElement('p', 'inspect-note', '检测到多档画质；默认使用自动模式，也可以在上方选择具体 variant。'));
           }
         }
 
         function renderInspect(info) {
           inspectPanel.hidden = false;
           inspectResult.replaceChildren();
+          inspectedMediaURL = mediaUrl.value.trim();
+          inspectedVariantIndexes = [];
           var summary = createElement('dl', 'info-grid');
           appendInfoItem(summary, '格式', info && info.format);
           appendInfoItem(summary, '时长', formatDuration(info && info.duration_ms));
@@ -901,6 +1075,48 @@
           table.appendChild(body);
           tableWrap.appendChild(table);
           inspectResult.appendChild(tableWrap);
+        }
+
+        function cloneTaskRequest(request) {
+          var copy = {};
+          if (!request || typeof request !== 'object') {
+            return copy;
+          }
+          Object.keys(request).forEach(function (key) {
+            var value = request[key];
+            if (typeof value === 'string' || typeof value === 'number' || value === null || typeof value === 'boolean') {
+              copy[key] = value;
+            }
+          });
+          return copy;
+        }
+
+        function rememberTaskRequest(id, request) {
+          if (!id || !request || typeof request !== 'object') {
+            return;
+          }
+          transientTaskRequests[id] = cloneTaskRequest(request);
+        }
+
+        function forgetTaskRequest(id) {
+          if (id) {
+            delete transientTaskRequests[id];
+          }
+        }
+
+        function taskRequestFor(id) {
+          return id && transientTaskRequests[id] ? transientTaskRequests[id] : null;
+        }
+
+        function taskErrorMessage(task) {
+          if (!task || (!task.error_code && !task.error_message)) {
+            return '';
+          }
+          return friendlyError({
+            code: task.error_code,
+            message: task.error_message,
+            status: task.error_status
+          });
         }
 
         function taskStatus(task) {
@@ -961,19 +1177,27 @@
           if (task && Number(task.bytes_done) > 0) { appendTaskMeta(card, '已处理', formatBytes(task.bytes_done)); }
           renderProgress(card, task);
 
-          if (task && task.error_message) {
+          var errorMessage = taskErrorMessage(task);
+          if (errorMessage) {
             var error = createElement('p', 'task-error');
             error.appendChild(createElement('strong', '', '错误：'));
-            error.appendChild(document.createTextNode(redactError(task.error_message)));
+            error.appendChild(document.createTextNode(errorMessage));
             card.appendChild(error);
           }
 
-          if (task && ACTIVE_STATUSES[task.status] && task.id) {
+          if (task && task.id && (ACTIVE_STATUSES[task.status] || (RETRYABLE_STATUSES[task.status] && taskRequestFor(String(task.id))))) {
             var actionRow = createElement('div', 'task-actions');
-            var cancel = createElement('button', 'button small', '取消任务');
-            cancel.type = 'button';
-            cancel.addEventListener('click', function () { cancelTask(String(task.id), cancel); });
-            actionRow.appendChild(cancel);
+            if (ACTIVE_STATUSES[task.status]) {
+              var cancel = createElement('button', 'button small', '取消任务');
+              cancel.type = 'button';
+              cancel.addEventListener('click', function () { cancelTask(String(task.id), cancel); });
+              actionRow.appendChild(cancel);
+            } else if (RETRYABLE_STATUSES[task.status] && taskRequestFor(String(task.id))) {
+              var retry = createElement('button', 'button small', '重试');
+              retry.type = 'button';
+              retry.addEventListener('click', function () { retryTask(String(task.id), retry); });
+              actionRow.appendChild(retry);
+            }
             card.appendChild(actionRow);
           }
           return card;
@@ -990,6 +1214,14 @@
 
         function renderTasks(tasks) {
           taskData = Array.isArray(tasks) ? tasks : [];
+          taskData.forEach(function (task) {
+            if (task && task.id) {
+              var id = String(task.id);
+              if (task.status === 'succeeded' || task.status === 'canceled') {
+                forgetTaskRequest(id);
+              }
+            }
+          });
           var current = taskData.filter(function (task) { return task && ACTIVE_STATUSES[task.status]; });
           var history = taskData.filter(function (task) { return !task || !ACTIVE_STATUSES[task.status]; });
           activeCount.textContent = current.length ? '(' + current.length + ')' : '';
@@ -1061,12 +1293,16 @@
         async function createTask(event) {
           event.preventDefault();
           if (formRequestInFlight || !validateURL()) { return; }
+          var request = readTaskRequest();
           setMessage(formMessage, '正在创建任务…');
           setFormBusy(true);
           try {
-            var task = await apiRequest('/api/tasks', jsonOptions('POST', readTaskRequest()));
+            var task = await apiRequest('/api/tasks', jsonOptions('POST', request));
             clearSensitiveInputs();
             var taskID = task && task.id ? String(task.id) : '';
+            if (taskID) {
+              rememberTaskRequest(taskID, request);
+            }
             setMessage(formMessage, taskID ? '任务已创建（' + taskID + '）。敏感请求信息已清空。' : '任务已创建，敏感请求信息已清空。', 'success');
             await loadTasks(true);
           } catch (error) {
@@ -1076,11 +1312,31 @@
           }
         }
 
+        async function retryTask(id, button) {
+          var request = taskRequestFor(id);
+          if (!id || !request || (button && button.disabled)) { return; }
+          if (button) { button.disabled = true; button.textContent = '重试中…'; }
+          try {
+            var task = await apiRequest('/api/tasks', jsonOptions('POST', cloneTaskRequest(request)));
+            var taskID = task && task.id ? String(task.id) : '';
+            forgetTaskRequest(id);
+            if (taskID) {
+              rememberTaskRequest(taskID, request);
+            }
+            setMessage(taskMessage, taskID ? '已创建重试任务（' + taskID + '）。' : '已创建重试任务。', 'success');
+            await loadTasks(true);
+          } catch (error) {
+            setMessage(taskMessage, friendlyError(error), 'error');
+            if (button) { button.disabled = false; button.textContent = '重试'; }
+          }
+        }
+
         async function cancelTask(id, button) {
           if (!id || (button && button.disabled)) { return; }
           if (button) { button.disabled = true; button.textContent = '取消中…'; }
           try {
             await apiRequest('/api/tasks/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
+            forgetTaskRequest(id);
             setMessage(taskMessage, '取消请求已提交。', 'success');
             await loadTasks(true);
           } catch (error) {
@@ -1089,6 +1345,13 @@
           }
         }
 
+        mediaUrl.addEventListener('input', function () {
+          if (inspectedMediaURL && mediaUrl.value.trim() !== inspectedMediaURL) {
+            inspectedMediaURL = '';
+            inspectedVariantIndexes = [];
+            inspectPanel.hidden = true;
+          }
+        });
         inspectButton.addEventListener('click', inspectMedia);
         taskForm.addEventListener('submit', createTask);
         refreshButton.addEventListener('click', function () { loadTasks(false); });

@@ -117,6 +117,7 @@ func TestCreateSuccessProgressAndSensitiveMetadata(t *testing.T) {
 	task, err := s.CreateTask(context.Background(), app.CreateTaskRequest{
 		URL:        "https://example.test/video.m3u8?token=do-not-store#frag",
 		Referer:    "https://example.test/watch?id=private",
+		Origin:     "https://example.test",
 		UserAgent:  "private-agent",
 		Cookie:     "session=private",
 		OutputName: "saved",
@@ -132,7 +133,7 @@ func TestCreateSuccessProgressAndSensitiveMetadata(t *testing.T) {
 	if got.SourceDisplay != "https://example.test/video.m3u8" || strings.Contains(got.SourceDisplay, "token") {
 		t.Fatalf("sensitive source display = %q", got.SourceDisplay)
 	}
-	if seen.URL == "" || seen.Cookie != "session=private" || seen.Referer == "" {
+	if seen.URL == "" || seen.Cookie != "session=private" || seen.Referer == "" || seen.Origin != "https://example.test" {
 		t.Fatalf("runner did not receive transient request: %+v", seen)
 	}
 	if strings.Contains(got.ErrorMessage, "private") || strings.Contains(got.ErrorMessage, "token") {
@@ -280,6 +281,41 @@ func TestInspectMapsMediaAccessDenied(t *testing.T) {
 	}
 	if !strings.Contains(appErr.Message, "Referer") || !strings.Contains(appErr.Message, "Cookie") || strings.Contains(appErr.Message, "secret") {
 		t.Fatalf("access error message = %q", appErr.Message)
+	}
+}
+
+func TestMediaErrorsUseStableNamespacedCodes(t *testing.T) {
+	testCases := []struct {
+		err  error
+		code string
+	}{
+		{err: media.ErrRateLimited, code: "media_rate_limited"},
+		{err: media.ErrTimeout, code: "media_timeout"},
+		{err: media.ErrNetwork, code: "media_network_error"},
+		{err: media.ErrHTTPStatus, code: "media_http_error"},
+		{err: media.ErrInvalidPlaylist, code: "hls_invalid_playlist"},
+		{err: media.ErrVariantUnavailable, code: "hls_variant_unavailable"},
+		{err: media.ErrURLExpired, code: "media_url_expired"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.code, func(t *testing.T) {
+			mapped := mapMediaError("inspect", testCase.err)
+			if mapped.Code != testCase.code {
+				t.Fatalf("code = %q, want %q", mapped.Code, testCase.code)
+			}
+		})
+	}
+}
+
+func TestCreateTaskRejectsPageURLAsOrigin(t *testing.T) {
+	s := newTestService(t, &fakeRunner{}, 1)
+	_, err := s.CreateTask(context.Background(), app.CreateTaskRequest{
+		URL:    "https://media.example.test/master.m3u8",
+		Origin: "https://watch.example.test/video?id=private",
+	})
+	var appErr *app.Error
+	if !errors.As(err, &appErr) || appErr.Code != "invalid_request" {
+		t.Fatalf("CreateTask error = %T %v", err, err)
 	}
 }
 

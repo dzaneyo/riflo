@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,12 +31,17 @@ const (
 	// BytesDone, DurationMS, and OutTimeMS use zero for an unknown value.
 	UnknownFraction = -1.0
 
-	maxHeaderValue  = 64 * 1024
-	maxStderrBytes  = 8 * 1024
-	maxErrorBytes   = 4 * 1024
-	maxHLSBodyBytes = 2 * 1024 * 1024
-	hlsProbeTimeout = 8 * time.Second
-	maxHLSRedirects = 5
+	maxHeaderValue          = 64 * 1024
+	maxStderrBytes          = 8 * 1024
+	maxErrorBytes           = 4 * 1024
+	maxHLSBodyBytes         = 2 * 1024 * 1024
+	hlsProbeTimeout         = 8 * time.Second
+	maxHLSRedirects         = 5
+	hlsRequestAttempts      = 3
+	hlsRetryBaseDelay       = 200 * time.Millisecond
+	ffmpegReconnectRetries  = 3
+	ffmpegReconnectDelayMax = 2
+	ffmpegReconnectTotalMax = 10
 )
 
 var (
@@ -55,6 +61,19 @@ var (
 	// ErrHTTPStatus identifies a bounded HLS preflight response with an
 	// unsuccessful status other than 401/403.
 	ErrHTTPStatus = errors.New("media request returned an unsuccessful status")
+	// ErrRateLimited identifies an upstream 429 response after bounded retries.
+	ErrRateLimited = errors.New("media request was rate limited")
+	// ErrTimeout identifies a bounded network or media-tool timeout.
+	ErrTimeout = errors.New("media request timed out")
+	// ErrNetwork identifies a network failure that is not an HTTP status.
+	ErrNetwork = errors.New("media network request failed")
+	// ErrInvalidPlaylist identifies a response that cannot be used as HLS.
+	ErrInvalidPlaylist = errors.New("HLS playlist is invalid")
+	// ErrVariantUnavailable identifies a selected HLS quality that is not
+	// present in the current master playlist.
+	ErrVariantUnavailable = errors.New("selected HLS variant is unavailable")
+	// ErrURLExpired identifies a media URL that is no longer available.
+	ErrURLExpired = errors.New("media URL is unavailable or expired")
 	// ErrPlaylistTooLarge prevents a preflight from reading an unbounded body.
 	ErrPlaylistTooLarge = errors.New("HLS playlist is too large")
 )
@@ -130,7 +149,7 @@ func (r *Runner) Inspect(ctx context.Context, req app.InspectRequest) (app.Media
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	request, err := normalizeRequest(req.URL, req.Referer, req.UserAgent, req.Cookie)
+	request, err := normalizeRequestWithOrigin(req.URL, req.Referer, req.Origin, req.UserAgent, req.Cookie)
 	if err != nil {
 		return app.MediaInfo{}, err
 	}
@@ -140,7 +159,7 @@ func (r *Runner) Inspect(ctx context.Context, req app.InspectRequest) (app.Media
 		preflightAttempted = true
 		preflight, preflightErr := r.inspectHLS(ctx, request)
 		if preflightErr != nil {
-			if errors.Is(preflightErr, ErrAccessDenied) || errors.Is(preflightErr, context.Canceled) || errors.Is(preflightErr, context.DeadlineExceeded) && ctx.Err() != nil {
+			if shouldReturnHLSProbeError(preflightErr, ctx) {
 				return app.MediaInfo{}, preflightErr
 			}
 			// Preflight is an additive diagnostic. If the playlist endpoint is
@@ -160,7 +179,7 @@ func (r *Runner) Inspect(ctx context.Context, req app.InspectRequest) (app.Media
 	if hls == nil && !preflightAttempted && isHLSFormat(info.Format) {
 		preflight, preflightErr := r.inspectHLS(ctx, request)
 		if preflightErr != nil {
-			if errors.Is(preflightErr, ErrAccessDenied) || errors.Is(preflightErr, context.Canceled) || errors.Is(preflightErr, context.DeadlineExceeded) && ctx.Err() != nil {
+			if shouldReturnHLSProbeError(preflightErr, ctx) {
 				return app.MediaInfo{}, preflightErr
 			}
 		} else if preflight != nil {
@@ -188,7 +207,7 @@ func (r *Runner) Download(ctx context.Context, taskID string, req app.CreateTask
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	request, err := normalizeRequest(req.URL, req.Referer, req.UserAgent, req.Cookie)
+	request, err := normalizeRequestWithOrigin(req.URL, req.Referer, req.Origin, req.UserAgent, req.Cookie)
 	if err != nil {
 		return Result{}, err
 	}
@@ -202,6 +221,22 @@ func (r *Runner) Download(ctx context.Context, taskID string, req app.CreateTask
 	}
 	if err := contextErr(ctx); err != nil {
 		return Result{}, err
+	}
+
+	// A selected HLS quality is resolved at download time, immediately before
+	// ffprobe/ffmpeg. The signed child URL stays in this in-memory request only
+	// and is never put into the task store or response model.
+	isHLSInput := isLikelyHLSURL(request.URL)
+	if req.HLSVariantIndex != nil {
+		if *req.HLSVariantIndex < 0 {
+			return Result{}, ErrVariantUnavailable
+		}
+		variantURL, resolveErr := r.resolveHLSVariant(ctx, request, *req.HLSVariantIndex)
+		if resolveErr != nil {
+			return Result{}, resolveErr
+		}
+		request.URL = variantURL
+		isHLSInput = true
 	}
 
 	// Probing is intentionally best effort. Some valid ffmpeg inputs do not
@@ -238,7 +273,7 @@ func (r *Runner) Download(ctx context.Context, taskID string, req app.CreateTask
 		}
 	}()
 
-	args, err := ffmpegArgs(request, spec, tempPath, format)
+	args, err := ffmpegArgs(request, spec, tempPath, format, isHLSInput)
 	if err != nil {
 		return Result{}, err
 	}
@@ -275,15 +310,26 @@ type mediaRequest struct {
 	URL       string
 	Display   string
 	Referer   string
+	Origin    string
 	UserAgent string
 	Cookie    string
 	HeaderArg []string
 	Secrets   []string
 }
 
+// normalizeRequest preserves the package-local helper's original signature
+// for callers that do not need an Origin header.
 func normalizeRequest(rawURL, referer, userAgent, cookie string) (mediaRequest, error) {
+	return normalizeRequestWithOrigin(rawURL, referer, "", userAgent, cookie)
+}
+
+func normalizeRequestWithOrigin(rawURL, referer, origin, userAgent, cookie string) (mediaRequest, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	parsed, err := parseMediaURL(rawURL)
+	if err != nil {
+		return mediaRequest{}, err
+	}
+	origin, err = normalizeOriginHeader(origin)
 	if err != nil {
 		return mediaRequest{}, err
 	}
@@ -292,6 +338,7 @@ func normalizeRequest(rawURL, referer, userAgent, cookie string) (mediaRequest, 
 		value string
 	}{
 		{name: "Referer", value: referer},
+		{name: "Origin", value: origin},
 		{name: "User-Agent", value: userAgent},
 		{name: "Cookie", value: cookie},
 	} {
@@ -299,20 +346,34 @@ func normalizeRequest(rawURL, referer, userAgent, cookie string) (mediaRequest, 
 			return mediaRequest{}, err
 		}
 	}
-	headerArg, err := makeHeaderArg(referer, userAgent, cookie)
+	headerArg, err := makeHeaderArgWithOrigin(referer, origin, userAgent, cookie)
 	if err != nil {
 		return mediaRequest{}, err
 	}
-	secrets := make([]string, 0, 3)
-	for _, value := range []string{referer, userAgent, cookie} {
+	secrets := make([]string, 0, 4)
+	for _, value := range []string{referer, origin, userAgent, cookie} {
 		if value != "" {
 			secrets = append(secrets, value)
 		}
 	}
 	return mediaRequest{
-		URL: rawURL, Display: displayURL(parsed), Referer: referer, UserAgent: userAgent,
+		URL: rawURL, Display: displayURL(parsed), Referer: referer, Origin: origin, UserAgent: userAgent,
 		Cookie: cookie, HeaderArg: headerArg, Secrets: secrets,
 	}, nil
+}
+
+func normalizeOriginHeader(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "null" {
+		return value, nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed == nil || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("Origin header must be an HTTP origin")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func parseMediaURL(raw string) (*url.URL, error) {
@@ -350,11 +411,16 @@ func validateHeaderValue(name, value string) error {
 }
 
 func makeHeaderArg(referer, userAgent, cookie string) ([]string, error) {
+	return makeHeaderArgWithOrigin(referer, "", userAgent, cookie)
+}
+
+func makeHeaderArgWithOrigin(referer, origin, userAgent, cookie string) ([]string, error) {
 	for _, header := range []struct {
 		name  string
 		value string
 	}{
 		{name: "Referer", value: referer},
+		{name: "Origin", value: origin},
 		{name: "User-Agent", value: userAgent},
 		{name: "Cookie", value: cookie},
 	} {
@@ -362,15 +428,19 @@ func makeHeaderArg(referer, userAgent, cookie string) ([]string, error) {
 			return nil, err
 		}
 	}
-	headers := make([]string, 0, 3)
-	if referer != "" {
-		headers = append(headers, "Referer: "+referer)
-	}
-	if userAgent != "" {
-		headers = append(headers, "User-Agent: "+userAgent)
-	}
-	if cookie != "" {
-		headers = append(headers, "Cookie: "+cookie)
+	headers := make([]string, 0, 4)
+	for _, header := range []struct {
+		name  string
+		value string
+	}{
+		{name: "Referer", value: referer},
+		{name: "Origin", value: origin},
+		{name: "User-Agent", value: userAgent},
+		{name: "Cookie", value: cookie},
+	} {
+		if header.value != "" {
+			headers = append(headers, header.name+": "+header.value)
+		}
 	}
 	if len(headers) == 0 {
 		return nil, nil
@@ -389,77 +459,222 @@ func isLikelyHLSURL(raw string) bool {
 	return strings.HasSuffix(path, ".m3u8") || strings.Contains(path, ".m3u8/")
 }
 
-// inspectHLS performs one bounded playlist request for an explicit m3u8 URL.
-// It is intentionally separate from ffprobe: a failed diagnostic request is
-// allowed to fall back to ffprobe, while upstream 401/403 responses remain
-// actionable and stable for the API layer.
+// inspectHLS performs a bounded playlist request for an explicit m3u8 URL.
+// It is intentionally separate from ffprobe: ordinary non-HLS responses can
+// still fall back to ffprobe, while actionable upstream failures retain a
+// stable classification for the API layer.
 func (r *Runner) inspectHLS(ctx context.Context, request mediaRequest) (*app.HLSInfo, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, hlsProbeTimeout)
-	defer cancel()
-	hlsRequest, err := http.NewRequestWithContext(probeCtx, http.MethodGet, request.URL, nil)
+	body, finalURL, err := r.fetchHLSPlaylist(ctx, request)
 	if err != nil {
 		return nil, err
-	}
-	hlsRequest.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.8")
-	setTransientHeader(hlsRequest.Header, "Referer", request.Referer)
-	setTransientHeader(hlsRequest.Header, "User-Agent", request.UserAgent)
-	setTransientHeader(hlsRequest.Header, "Cookie", request.Cookie)
-
-	initialURL, _ := url.Parse(request.URL)
-	client := &http.Client{
-		Timeout: hlsProbeTimeout,
-		CheckRedirect: func(next *http.Request, via []*http.Request) error {
-			if len(via) >= maxHLSRedirects {
-				return errors.New("too many HLS redirects")
-			}
-			if initialURL != nil && sameHTTPOrigin(initialURL, next.URL) {
-				setTransientHeader(next.Header, "Referer", request.Referer)
-				setTransientHeader(next.Header, "User-Agent", request.UserAgent)
-				setTransientHeader(next.Header, "Cookie", request.Cookie)
-				return nil
-			}
-			// A playlist CDN redirect may cross origins. Do not forward user
-			// supplied Cookie/Referer values to a new origin; the latter may
-			// itself contain a signed query. User-Agent is not credential data.
-			next.Header.Del("Referer")
-			next.Header.Del("Cookie")
-			setTransientHeader(next.Header, "User-Agent", request.UserAgent)
-			return nil
-		},
-	}
-	response, err := client.Do(hlsRequest)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		return nil, fmt.Errorf("%w: upstream returned %d", ErrAccessDenied, response.StatusCode)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("%w: upstream returned %d", ErrHTTPStatus, response.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxHLSBodyBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > maxHLSBodyBytes {
-		return nil, ErrPlaylistTooLarge
-	}
-	finalURL := response.Request.URL
-	if finalURL == nil {
-		finalURL = initialURL
 	}
 	info, err := parseHLSPlaylist(body, finalURL)
 	if errors.Is(err, errNotHLSPlaylist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrInvalidPlaylist, err)
 	}
 	return &info, nil
+}
+
+func (r *Runner) fetchHLSPlaylist(ctx context.Context, request mediaRequest) ([]byte, *url.URL, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, hlsProbeTimeout)
+	defer cancel()
+	initialURL, err := url.Parse(request.URL)
+	if err != nil || initialURL == nil {
+		return nil, nil, ErrInvalidURL
+	}
+	client := &http.Client{
+		Timeout: hlsProbeTimeout,
+		CheckRedirect: func(next *http.Request, via []*http.Request) error {
+			if len(via) >= maxHLSRedirects {
+				return fmt.Errorf("%w: too many HLS redirects", ErrNetwork)
+			}
+			if sameHTTPOrigin(initialURL, next.URL) {
+				setTransientHeader(next.Header, "Referer", request.Referer)
+				setTransientHeader(next.Header, "Origin", request.Origin)
+				setTransientHeader(next.Header, "User-Agent", request.UserAgent)
+				setTransientHeader(next.Header, "Cookie", request.Cookie)
+				return nil
+			}
+			// A playlist CDN redirect may cross origins. Do not forward user
+			// supplied Cookie/Referer values to a new origin. Origin is a
+			// browser-style context header and is safe to carry transiently.
+			next.Header.Del("Referer")
+			next.Header.Del("Cookie")
+			setTransientHeader(next.Header, "Origin", request.Origin)
+			setTransientHeader(next.Header, "User-Agent", request.UserAgent)
+			return nil
+		},
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < hlsRequestAttempts; attempt++ {
+		if err := contextErr(probeCtx); err != nil {
+			return nil, nil, classifyHTTPError(err)
+		}
+		hlsRequest, requestErr := http.NewRequestWithContext(probeCtx, http.MethodGet, request.URL, nil)
+		if requestErr != nil {
+			return nil, nil, requestErr
+		}
+		hlsRequest.Header.Set("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.8")
+		setTransientHeader(hlsRequest.Header, "Referer", request.Referer)
+		setTransientHeader(hlsRequest.Header, "Origin", request.Origin)
+		setTransientHeader(hlsRequest.Header, "User-Agent", request.UserAgent)
+		setTransientHeader(hlsRequest.Header, "Cookie", request.Cookie)
+
+		response, requestErr := client.Do(hlsRequest)
+		if requestErr != nil {
+			lastErr = classifyHTTPError(requestErr)
+			if !isRetryableHLSRequestError(lastErr) || attempt == hlsRequestAttempts-1 {
+				return nil, nil, lastErr
+			}
+			if err := waitHLSRetry(probeCtx, attempt); err != nil {
+				return nil, nil, classifyHTTPError(err)
+			}
+			continue
+		}
+
+		statusErr := hlsStatusError(response.StatusCode)
+		if statusErr != nil {
+			statusCode := response.StatusCode
+			_ = response.Body.Close()
+			lastErr = statusErr
+			if !isRetryableHLSStatus(statusCode) || attempt == hlsRequestAttempts-1 {
+				return nil, nil, lastErr
+			}
+			if err := waitHLSRetry(probeCtx, attempt); err != nil {
+				return nil, nil, classifyHTTPError(err)
+			}
+			continue
+		}
+
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxHLSBodyBytes+1))
+		_ = response.Body.Close()
+		if readErr != nil {
+			lastErr = classifyHTTPError(readErr)
+			if !isRetryableHLSRequestError(lastErr) || attempt == hlsRequestAttempts-1 {
+				return nil, nil, lastErr
+			}
+			if err := waitHLSRetry(probeCtx, attempt); err != nil {
+				return nil, nil, classifyHTTPError(err)
+			}
+			continue
+		}
+		if len(body) > maxHLSBodyBytes {
+			return nil, nil, fmt.Errorf("%w: playlist exceeds size limit", ErrInvalidPlaylist)
+		}
+		finalURL := response.Request.URL
+		if finalURL == nil {
+			finalURL = initialURL
+		}
+		return body, finalURL, nil
+	}
+	return nil, nil, lastErr
+}
+
+func hlsStatusError(status int) error {
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return fmt.Errorf("%w: upstream access denied", ErrAccessDenied)
+	case status == http.StatusTooManyRequests:
+		return fmt.Errorf("%w: upstream rate limit", ErrRateLimited)
+	case status == http.StatusRequestTimeout:
+		return fmt.Errorf("%w: upstream request timed out", ErrTimeout)
+	case status == http.StatusNotFound || status == http.StatusGone:
+		return fmt.Errorf("%w: upstream media URL is unavailable", ErrURLExpired)
+	case status < http.StatusOK || status >= http.StatusMultipleChoices:
+		return fmt.Errorf("%w: upstream returned an HTTP error", ErrHTTPStatus)
+	default:
+		return nil
+	}
+}
+
+func classifyHTTPError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: request deadline exceeded", ErrTimeout)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return fmt.Errorf("%w: network timeout", ErrTimeout)
+	}
+	return fmt.Errorf("%w: request failed", ErrNetwork)
+}
+
+func isRetryableHLSRequestError(err error) bool {
+	return errors.Is(err, ErrRateLimited) || errors.Is(err, ErrNetwork) || errors.Is(err, ErrTimeout)
+}
+
+func isRetryableHLSStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+func waitHLSRetry(ctx context.Context, attempt int) error {
+	delay := hlsRetryBaseDelay * time.Duration(1<<attempt)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func shouldReturnHLSProbeError(err error, ctx context.Context) bool {
+	if err == nil {
+		return false
+	}
+	// A response that is simply not HLS is represented by a nil summary and can
+	// still fall back to ffprobe. Once the bounded HLS request has a stable
+	// upstream response or playlist failure, preserve that classification.
+	// Transport failures remain additive because ffprobe may use a compatible
+	// protocol path or provide a more precise media-tool diagnosis.
+	for _, stable := range []error{
+		ErrAccessDenied,
+		ErrRateLimited,
+		ErrHTTPStatus,
+		ErrInvalidPlaylist,
+		ErrURLExpired,
+	} {
+		if errors.Is(err, stable) {
+			return true
+		}
+	}
+	return errors.Is(err, context.Canceled) || (errors.Is(err, context.DeadlineExceeded) && ctx != nil && ctx.Err() != nil)
+}
+
+func (r *Runner) resolveHLSVariant(ctx context.Context, request mediaRequest, index int) (string, error) {
+	body, finalURL, err := r.fetchHLSPlaylist(ctx, request)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := parseHLSPlaylistDetailed(body, finalURL)
+	if errors.Is(err, errNotHLSPlaylist) {
+		return "", ErrInvalidPlaylist
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidPlaylist, err)
+	}
+	if parsed.Info.PlaylistType != hlsPlaylistTypeMaster {
+		return "", ErrVariantUnavailable
+	}
+	for _, variant := range parsed.Variants {
+		if variant.Index == index {
+			return variant.URL, nil
+		}
+	}
+	return "", ErrVariantUnavailable
 }
 
 func setTransientHeader(headers http.Header, name, value string) {
@@ -539,8 +754,26 @@ func (r *Runner) inspect(ctx context.Context, request mediaRequest) (app.MediaIn
 	return info, nil
 }
 
-func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string) ([]string, error) {
+func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string, hlsInput bool) ([]string, error) {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"}
+	if parsed, err := url.Parse(request.URL); err == nil && parsed != nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+		// These are protocol-level retries supported by the local FFmpeg build.
+		// The explicit retry count and total delay cap keep a broken source from
+		// holding a task forever. 401/403 are intentionally absent.
+		args = append(args,
+			"-reconnect", "1",
+			"-reconnect_streamed", "1",
+			"-reconnect_on_network_error", "1",
+			"-reconnect_on_http_error", "429,500,502,503,504",
+			"-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMax),
+			"-reconnect_max_retries", strconv.Itoa(ffmpegReconnectRetries),
+			"-reconnect_delay_total_max", strconv.Itoa(ffmpegReconnectTotalMax),
+			"-respect_retry_after", "1",
+		)
+		if hlsInput {
+			args = append(args, "-seg_max_retry", strconv.Itoa(ffmpegReconnectRetries))
+		}
+	}
 	args = append(args, request.HeaderArg...)
 	args = append(args,
 		"-i", request.URL,
@@ -892,6 +1125,24 @@ func commandError(tool string, waitErr error, stderr string, request mediaReques
 	if isAccessDeniedStderr(stderr) {
 		return fmt.Errorf("%w: %s was denied access", ErrAccessDenied, tool)
 	}
+	if isRateLimitedStderr(stderr) {
+		return fmt.Errorf("%w: %s was rate limited", ErrRateLimited, tool)
+	}
+	if isTimeoutStderr(stderr) {
+		return fmt.Errorf("%w: %s timed out", ErrTimeout, tool)
+	}
+	if isNetworkStderr(stderr) {
+		return fmt.Errorf("%w: %s network request failed", ErrNetwork, tool)
+	}
+	if isHTTPStderr(stderr) {
+		if isExpiredURLStderr(stderr) {
+			return fmt.Errorf("%w: %s media URL is unavailable", ErrURLExpired, tool)
+		}
+		return fmt.Errorf("%w: %s returned an HTTP error", ErrHTTPStatus, tool)
+	}
+	if isInvalidPlaylistStderr(stderr) {
+		return fmt.Errorf("%w: %s returned an invalid playlist", ErrInvalidPlaylist, tool)
+	}
 	summary := sanitizeStderr(stderr, request)
 	if summary == "" {
 		return fmt.Errorf("%s failed", tool)
@@ -906,6 +1157,60 @@ func isAccessDeniedStderr(stderr string) bool {
 		"401 unauthorized", "403 forbidden", "server returned 401", "server returned 403",
 		"status code 401", "status code 403",
 	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRateLimitedStderr(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "http error 429") || strings.Contains(lower, "429 too many") || strings.Contains(lower, "status code 429")
+}
+
+func isTimeoutStderr(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	for _, marker := range []string{"timed out", "timeout", "operation timed out"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNetworkStderr(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	for _, marker := range []string{"network is unreachable", "connection refused", "connection reset", "could not resolve host", "name or service not known", "tls handshake", "temporary failure in name resolution"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHTTPStderr(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	return strings.Contains(lower, "http error") || strings.Contains(lower, "http/1.1") || strings.Contains(lower, "server returned") || strings.Contains(lower, "status code")
+}
+
+func isExpiredURLStderr(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	for _, marker := range []string{
+		"http error 404", "http error 410", "http/1.1 404", "http/1.1 410",
+		"404 not found", "410 gone", "server returned 404", "server returned 410",
+		"status code 404", "status code 410",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isInvalidPlaylistStderr(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	for _, marker := range []string{"invalid data found", "invalid playlist", "failed to parse playlist", "not a valid m3u8"} {
 		if strings.Contains(lower, marker) {
 			return true
 		}
@@ -955,7 +1260,7 @@ func sanitizeStderr(stderr string, request mediaRequest) string {
 		if colon := strings.IndexByte(line, ':'); colon > 0 {
 			name := strings.TrimSpace(line[:colon])
 			switch strings.ToLower(name) {
-			case "cookie", "authorization", "proxy-authorization", "referer", "user-agent":
+			case "cookie", "authorization", "proxy-authorization", "referer", "origin", "user-agent":
 				lines[index] = line[:colon+1] + " [redacted]"
 			}
 		}

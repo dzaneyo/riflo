@@ -10,6 +10,12 @@ export const REQUEST_CONTEXT_SOURCE_LABELS = Object.freeze({
   [REQUEST_CONTEXT_SOURCE_ORIGIN]: 'origin',
 });
 
+export const REQUEST_HEADER_REFERER = 'referer';
+export const REQUEST_HEADER_ORIGIN = 'origin';
+export const REQUEST_HEADER_USER_AGENT = 'user_agent';
+
+const MAX_USER_AGENT_LENGTH = 1024;
+
 const REQUEST_CONTEXT_STRENGTH = Object.freeze({
   [REQUEST_CONTEXT_SOURCE_DOCUMENT]: 3,
   [REQUEST_CONTEXT_SOURCE_INITIATOR]: 2,
@@ -36,6 +42,77 @@ export function normalizeHTTPURL(value) {
   } catch {
     return '';
   }
+}
+
+function normalizeHTTPOrigin(value) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const trimmed = value.trim();
+  // A sandboxed document can legitimately send the opaque Origin value.
+  if (trimmed === 'null') return trimmed;
+  const normalized = normalizeHTTPURL(trimmed);
+  if (!normalized) return '';
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return '';
+  }
+}
+
+function normalizeUserAgent(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_USER_AGENT_LENGTH) return '';
+  // Header values are later encoded into a handoff URL. Reject control
+  // characters so a captured browser header can never become header syntax.
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) return '';
+  return trimmed;
+}
+
+function headerValue(entries, ...names) {
+  const wanted = new Set(names.map((name) => name.toLowerCase()));
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string') continue;
+    if (!wanted.has(entry.name.toLowerCase())) continue;
+    if (typeof entry.value === 'string') return entry.value;
+  }
+  return '';
+}
+
+/**
+ * Keep only the request headers that are useful for replaying an HLS request.
+ * This intentionally has a positive allow-list: Cookie, Authorization and
+ * every other header are ignored rather than copied into session storage.
+ * Both webRequest's [{name, value}] shape and our stored object shape are
+ * accepted so old session entries can be normalized safely.
+ */
+export function normalizeRequestHeaders(value) {
+  let entries;
+  if (Array.isArray(value)) {
+    entries = value;
+  } else if (value && typeof value === 'object') {
+    entries = [
+      { name: REQUEST_HEADER_REFERER, value: value.referer ?? value.Referer },
+      { name: REQUEST_HEADER_ORIGIN, value: value.origin ?? value.Origin },
+      {
+        name: 'user-agent',
+        value: value.userAgent ?? value.user_agent ?? value['User-Agent'],
+      },
+    ];
+  } else {
+    return null;
+  }
+
+  const result = {};
+  const referer = normalizeHTTPURL(headerValue(entries, 'referer'));
+  if (referer) result[REQUEST_HEADER_REFERER] = referer;
+
+  const origin = normalizeHTTPOrigin(headerValue(entries, 'origin'));
+  if (origin) result[REQUEST_HEADER_ORIGIN] = origin;
+
+  const userAgent = normalizeUserAgent(headerValue(entries, 'user-agent'));
+  if (userAgent) result[REQUEST_HEADER_USER_AGENT] = userAgent;
+
+  return Object.keys(result).length ? result : null;
 }
 
 /**
@@ -115,6 +192,7 @@ export function createCandidate(url, seenAt = Date.now(), metadata = {}) {
     contentType: typeof details.contentType === 'string' ? details.contentType : '',
     detectionSources: normalizeDetectionSources(details.detectionSources),
     requestContext: normalizeRequestContext(details.requestContext),
+    requestHeaders: normalizeRequestHeaders(details.requestHeaders),
     firstSeen: seenAt,
     lastSeen: seenAt,
   };
@@ -125,7 +203,7 @@ export function createCandidate(url, seenAt = Date.now(), metadata = {}) {
  * kept in the encoded hash for riflo; the extension does not POST credentials
  * or read cookies.
  */
-export function buildHandoffURL(source, referer = '', base = LOOPBACK_UI) {
+export function buildHandoffURL(source, referer = '', base = LOOPBACK_UI, requestHeaders = null) {
   const target = new URL(base);
   const params = new URLSearchParams();
   params.set('source', source);
@@ -134,6 +212,9 @@ export function buildHandoffURL(source, referer = '', base = LOOPBACK_UI) {
   // spaces in a manually constructed test URL are encoded by URLSearchParams
   // without changing the value returned by URLSearchParams.get()).
   params.set('referer', typeof referer === 'string' ? referer : '');
+  const normalizedHeaders = normalizeRequestHeaders(requestHeaders);
+  if (normalizedHeaders?.origin) params.set('origin', normalizedHeaders.origin);
+  if (normalizedHeaders?.user_agent) params.set('user_agent', normalizedHeaders.user_agent);
   params.set('from', 'extension');
   target.hash = params.toString();
   return target.toString();

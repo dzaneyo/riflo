@@ -99,6 +99,9 @@ func TestInspectHLSPreflightUsesTransientHeaders(t *testing.T) {
 		if r.Header.Get("User-Agent") != "riflo-test-agent" {
 			t.Errorf("User-Agent = %q", r.Header.Get("User-Agent"))
 		}
+		if r.Header.Get("Origin") != "https://watch.example.test" {
+			t.Errorf("Origin = %q", r.Header.Get("Origin"))
+		}
 		if r.Header.Get("Cookie") != "session=private" {
 			t.Errorf("Cookie = %q", r.Header.Get("Cookie"))
 		}
@@ -111,6 +114,7 @@ func TestInspectHLSPreflightUsesTransientHeaders(t *testing.T) {
 	info, err := runner.Inspect(context.Background(), app.InspectRequest{
 		URL:       server.URL + "/master.m3u8?token=secret",
 		Referer:   "https://watch.example.test/page?id=private",
+		Origin:    "https://watch.example.test",
 		UserAgent: "riflo-test-agent",
 		Cookie:    "session=private",
 	})

@@ -45,6 +45,7 @@ func (s TaskStatus) Valid() bool {
 type InspectRequest struct {
 	URL       string `json:"url"`
 	Referer   string `json:"referer,omitempty"`
+	Origin    string `json:"origin,omitempty"`
 	UserAgent string `json:"user_agent,omitempty"`
 	Cookie    string `json:"cookie,omitempty"`
 }
@@ -94,13 +95,15 @@ type MediaStream struct {
 // CreateTaskRequest contains user-selected output settings and transient
 // request headers. Only the non-sensitive fields belong in task history.
 type CreateTaskRequest struct {
-	URL        string `json:"url"`
-	Referer    string `json:"referer,omitempty"`
-	UserAgent  string `json:"user_agent,omitempty"`
-	Cookie     string `json:"cookie,omitempty"`
-	OutputDir  string `json:"output_dir,omitempty"`
-	OutputName string `json:"output_name,omitempty"`
-	Format     string `json:"format,omitempty"`
+	URL             string `json:"url"`
+	Referer         string `json:"referer,omitempty"`
+	Origin          string `json:"origin,omitempty"`
+	UserAgent       string `json:"user_agent,omitempty"`
+	Cookie          string `json:"cookie,omitempty"`
+	OutputDir       string `json:"output_dir,omitempty"`
+	OutputName      string `json:"output_name,omitempty"`
+	Format          string `json:"format,omitempty"`
+	HLSVariantIndex *int   `json:"hls_variant_index,omitempty"`
 }
 
 type TaskFilter struct {

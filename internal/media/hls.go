@@ -26,19 +26,40 @@ const (
 
 var errNotHLSPlaylist = errors.New("response is not an HLS playlist")
 
+// parsedHLSPlaylist keeps the real variant references private to the media
+// operation that needs them. The public app.HLSInfo intentionally contains
+// only sanitized display values.
+type parsedHLSPlaylist struct {
+	Info     app.HLSInfo
+	Variants []hlsVariantReference
+}
+
+type hlsVariantReference struct {
+	Index int
+	URL   string
+}
+
 // parseHLSPlaylist extracts only bounded, non-sensitive playlist metadata.
 // It deliberately does not retain segment, key, or variant URLs. The caller
 // can use the returned summary for UI diagnostics without exposing signed URL
 // query strings.
 func parseHLSPlaylist(body []byte, base *url.URL) (app.HLSInfo, error) {
+	parsed, err := parseHLSPlaylistDetailed(body, base)
+	if err != nil {
+		return app.HLSInfo{}, err
+	}
+	return parsed.Info, nil
+}
+
+func parseHLSPlaylistDetailed(body []byte, base *url.URL) (parsedHLSPlaylist, error) {
 	if len(body) == 0 {
-		return app.HLSInfo{}, errNotHLSPlaylist
+		return parsedHLSPlaylist{}, errNotHLSPlaylist
 	}
 
-	result := app.HLSInfo{
+	parsed := parsedHLSPlaylist{Info: app.HLSInfo{
 		Availability:  hlsAvailabilityUnknown,
 		SegmentFormat: hlsSegmentFormatUnknown,
-	}
+	}}
 	var (
 		isM3U8          bool
 		hasMediaMarkers bool
@@ -63,15 +84,19 @@ func parseHLSPlaylist(body []byte, base *url.URL) (app.HLSInfo, error) {
 		}
 
 		if strings.HasPrefix(line, "#EXT-X-STREAM-INF:") {
-			result.PlaylistType = hlsPlaylistTypeMaster
+			parsed.Info.PlaylistType = hlsPlaylistTypeMaster
 			pendingVariant = parseVariant(strings.TrimPrefix(line, "#EXT-X-STREAM-INF:"), variantIndex)
 			variantIndex++
 			continue
 		}
 		if pendingVariant != nil && !strings.HasPrefix(line, "#") {
-			if display := displayHLSReference(base, line); display != "" {
-				pendingVariant.URLDisplay = display
-				result.Variants = append(result.Variants, *pendingVariant)
+			if reference := resolveHLSReference(base, line); reference != "" {
+				pendingVariant.URLDisplay = displayHLSReference(base, line)
+				parsed.Info.Variants = append(parsed.Info.Variants, *pendingVariant)
+				parsed.Variants = append(parsed.Variants, hlsVariantReference{
+					Index: pendingVariant.Index,
+					URL:   reference,
+				})
 			}
 			pendingVariant = nil
 			continue
@@ -79,28 +104,28 @@ func parseHLSPlaylist(body []byte, base *url.URL) (app.HLSInfo, error) {
 
 		switch {
 		case strings.HasPrefix(line, "#EXTINF:"):
-			result.PlaylistType = hlsPlaylistTypeMedia
+			parsed.Info.PlaylistType = hlsPlaylistTypeMedia
 			hasMediaMarkers = true
 			pendingSegment = true
 		case strings.HasPrefix(line, "#EXT-X-MAP:"):
-			result.PlaylistType = hlsPlaylistTypeMedia
+			parsed.Info.PlaylistType = hlsPlaylistTypeMedia
 			hasMediaMarkers = true
 			if attrs := parseHLSAttributes(strings.TrimPrefix(line, "#EXT-X-MAP:")); attrs["BYTERANGE"] != "" {
-				result.ByteRange = true
+				parsed.Info.ByteRange = true
 			}
-			result.SegmentFormat = mergeSegmentFormat(result.SegmentFormat, hlsSegmentFormatFMP4)
+			parsed.Info.SegmentFormat = mergeSegmentFormat(parsed.Info.SegmentFormat, hlsSegmentFormatFMP4)
 		case strings.HasPrefix(line, "#EXT-X-BYTERANGE:"):
-			result.PlaylistType = hlsPlaylistTypeMedia
+			parsed.Info.PlaylistType = hlsPlaylistTypeMedia
 			hasMediaMarkers = true
-			result.ByteRange = true
+			parsed.Info.ByteRange = true
 		case strings.HasPrefix(line, "#EXT-X-KEY:"):
-			result.PlaylistType = hlsPlaylistTypeMedia
+			parsed.Info.PlaylistType = hlsPlaylistTypeMedia
 			hasMediaMarkers = true
 			method := strings.TrimSpace(parseHLSAttributes(strings.TrimPrefix(line, "#EXT-X-KEY:"))["METHOD"])
 			if method != "" && !strings.EqualFold(method, "NONE") {
 				if _, exists := encryptionSeen[method]; !exists {
 					encryptionSeen[method] = struct{}{}
-					result.EncryptionMethods = append(result.EncryptionMethods, method)
+					parsed.Info.EncryptionMethods = append(parsed.Info.EncryptionMethods, method)
 				}
 			}
 		case strings.HasPrefix(line, "#EXT-X-PLAYLIST-TYPE:"):
@@ -114,39 +139,39 @@ func parseHLSPlaylist(body []byte, base *url.URL) (app.HLSInfo, error) {
 		case strings.HasPrefix(line, "#EXT-X-TARGETDURATION:") ||
 			strings.HasPrefix(line, "#EXT-X-MEDIA-SEQUENCE:") ||
 			strings.HasPrefix(line, "#EXT-X-DISCONTINUITY"):
-			result.PlaylistType = hlsPlaylistTypeMedia
+			parsed.Info.PlaylistType = hlsPlaylistTypeMedia
 			hasMediaMarkers = true
 		case pendingSegment && !strings.HasPrefix(line, "#"):
-			result.PlaylistType = hlsPlaylistTypeMedia
+			parsed.Info.PlaylistType = hlsPlaylistTypeMedia
 			hasMediaMarkers = true
-			result.SegmentCount++
+			parsed.Info.SegmentCount++
 			pendingSegment = false
-			result.SegmentFormat = mergeSegmentFormat(result.SegmentFormat, segmentFormat(line))
+			parsed.Info.SegmentFormat = mergeSegmentFormat(parsed.Info.SegmentFormat, segmentFormat(line))
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return app.HLSInfo{}, err
+		return parsedHLSPlaylist{}, err
 	}
 	if !isM3U8 {
-		return app.HLSInfo{}, errNotHLSPlaylist
+		return parsedHLSPlaylist{}, errNotHLSPlaylist
 	}
-	if result.PlaylistType == "" {
-		if len(result.Variants) > 0 {
-			result.PlaylistType = hlsPlaylistTypeMaster
+	if parsed.Info.PlaylistType == "" {
+		if len(parsed.Info.Variants) > 0 {
+			parsed.Info.PlaylistType = hlsPlaylistTypeMaster
 		} else if hasMediaMarkers {
-			result.PlaylistType = hlsPlaylistTypeMedia
+			parsed.Info.PlaylistType = hlsPlaylistTypeMedia
 		} else {
-			return app.HLSInfo{}, errNotHLSPlaylist
+			return parsedHLSPlaylist{}, errNotHLSPlaylist
 		}
 	}
-	if result.PlaylistType == hlsPlaylistTypeMaster {
-		result.Availability = hlsAvailabilityUnknown
+	if parsed.Info.PlaylistType == hlsPlaylistTypeMaster {
+		parsed.Info.Availability = hlsAvailabilityUnknown
 	} else if hasEndList || playlistType == hlsAvailabilityVOD {
-		result.Availability = hlsAvailabilityVOD
+		parsed.Info.Availability = hlsAvailabilityVOD
 	} else {
-		result.Availability = hlsAvailabilityLive
+		parsed.Info.Availability = hlsAvailabilityLive
 	}
-	return result, nil
+	return parsed, nil
 }
 
 func parseVariant(raw string, index int) *app.HLSVariant {
@@ -210,6 +235,18 @@ func parseResolution(value string) (int, int) {
 }
 
 func displayHLSReference(base *url.URL, raw string) string {
+	resolved := resolveHLSReference(base, raw)
+	if resolved == "" {
+		return ""
+	}
+	parsed, err := url.Parse(resolved)
+	if err != nil {
+		return ""
+	}
+	return displayURL(parsed)
+}
+
+func resolveHLSReference(base *url.URL, raw string) string {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed == nil {
 		return ""
@@ -220,7 +257,7 @@ func displayHLSReference(base *url.URL, raw string) string {
 	if parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return ""
 	}
-	return displayURL(parsed)
+	return parsed.String()
 }
 
 func segmentFormat(raw string) string {

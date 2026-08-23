@@ -78,7 +78,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  riflo serve [--listen 127.0.0.1:8787] [--data-dir PATH] [--db PATH]")
-	fmt.Fprintln(w, "  riflo inspect URL [--referer URL] [--user-agent UA] [--cookie COOKIE]")
+	fmt.Fprintln(w, "  riflo inspect URL [--referer URL] [--origin ORIGIN] [--user-agent UA] [--cookie COOKIE]")
 	fmt.Fprintln(w, "  riflo download URL [options]")
 	fmt.Fprintln(w, "  riflo tasks [--server URL] [--status STATUS]")
 	fmt.Fprintln(w, "  riflo task TASK_ID [--server URL]")
@@ -92,9 +92,9 @@ func printCommandUsage(w io.Writer, command string) {
 	case "serve":
 		fmt.Fprintln(w, "Usage: riflo serve [--listen 127.0.0.1:8787] [--data-dir PATH] [--db PATH] [--downloads PATH]")
 	case "inspect":
-		fmt.Fprintln(w, "Usage: riflo inspect URL [--referer URL] [--user-agent UA] [--cookie COOKIE]")
+		fmt.Fprintln(w, "Usage: riflo inspect URL [--referer URL] [--origin ORIGIN] [--user-agent UA] [--cookie COOKIE]")
 	case "download":
-		fmt.Fprintln(w, "Usage: riflo download URL [--output-dir PATH] [--output-name NAME] [--referer URL] [--user-agent UA] [--cookie COOKIE] [--format mp4|mkv]")
+		fmt.Fprintln(w, "Usage: riflo download URL [--output-dir PATH] [--output-name NAME] [--referer URL] [--origin ORIGIN] [--user-agent UA] [--cookie COOKIE] [--format mp4|mkv] [--hls-variant-index INDEX]")
 	case "tasks":
 		fmt.Fprintln(w, "Usage: riflo tasks [--server URL] [--status STATUS]")
 	case "task":
@@ -246,6 +246,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 func runInspect(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("inspect", stderr)
 	referer := fs.String("referer", "", "request Referer")
+	origin := fs.String("origin", "", "request Origin")
 	userAgent := fs.String("user-agent", "", "request User-Agent")
 	cookie := fs.String("cookie", "", "request Cookie (not persisted)")
 	urlValue, err := parseURLArgs(fs, args)
@@ -255,7 +256,7 @@ func runInspect(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	result, err := media.DefaultRunner().Inspect(ctx, app.InspectRequest{
-		URL: urlValue, Referer: *referer, UserAgent: *userAgent, Cookie: *cookie,
+		URL: urlValue, Referer: *referer, Origin: *origin, UserAgent: *userAgent, Cookie: *cookie,
 	})
 	if err != nil {
 		return printCommandError(stderr, "inspect", err)
@@ -272,12 +273,17 @@ func runDownload(args []string, stdout, stderr io.Writer) int {
 	outputDir := fs.String("output-dir", cfg.DownloadsDir, "output directory")
 	outputName := fs.String("output-name", "", "output file name")
 	referer := fs.String("referer", "", "request Referer")
+	origin := fs.String("origin", "", "request Origin")
 	userAgent := fs.String("user-agent", "", "request User-Agent")
 	cookie := fs.String("cookie", "", "request Cookie (not persisted)")
 	format := fs.String("format", "mp4", "output format (mp4 or mkv)")
+	hlsVariantIndex := fs.Int("hls-variant-index", -1, "HLS variant index (optional)")
 	urlValue, err := parseURLArgs(fs, args)
 	if err != nil {
 		return printCommandError(stderr, "download", err)
+	}
+	if *hlsVariantIndex < -1 {
+		return printCommandError(stderr, "download", errors.New("hls variant index must be non-negative"))
 	}
 	taskID, err := newForegroundTaskID()
 	if err != nil {
@@ -287,8 +293,9 @@ func runDownload(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 	progress := newProgressPrinter(stderr)
 	result, err := media.DefaultRunner().Download(ctx, taskID, app.CreateTaskRequest{
-		URL: urlValue, Referer: *referer, UserAgent: *userAgent, Cookie: *cookie,
+		URL: urlValue, Referer: *referer, Origin: *origin, UserAgent: *userAgent, Cookie: *cookie,
 		OutputDir: *outputDir, OutputName: *outputName, Format: *format,
+		HLSVariantIndex: optionalVariantIndex(*hlsVariantIndex),
 	}, progress.report)
 	progress.finish()
 	if err != nil {
@@ -423,6 +430,13 @@ func newForegroundTaskID() (string, error) {
 		return "", fmt.Errorf("create task id: %w", err)
 	}
 	return "cli-" + hex.EncodeToString(random[:]), nil
+}
+
+func optionalVariantIndex(value int) *int {
+	if value < 0 {
+		return nil
+	}
+	return &value
 }
 
 type progressPrinter struct {

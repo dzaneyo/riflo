@@ -207,7 +207,7 @@ func TestStoreSchemaContainsNoSensitiveColumns(t *testing.T) {
 		t.Fatalf("schema columns = %#v, want %#v", columns, expected)
 	}
 	for _, column := range columns {
-		for _, sensitive := range []string{"url", "referer", "user_agent", "cookie", "token", "command", "authorization"} {
+		for _, sensitive := range []string{"url", "referer", "origin", "user_agent", "cookie", "token", "command", "authorization"} {
 			if column == sensitive {
 				t.Fatalf("sensitive schema column %q exists", column)
 			}

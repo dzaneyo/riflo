@@ -107,6 +107,30 @@ test('upgrades an origin context to a later initiator context', async () => {
   assert.equal(candidate.requestContext.source, 'initiator');
 });
 
+test('merges safe request headers and discards forbidden headers', async () => {
+  const storage = memoryStorage();
+  const store = createCandidateStore(storage);
+  const url = 'https://cdn.example.test/master.m3u8';
+  await store.add(5, createCandidate(url, 100, {
+    requestHeaders: [{ name: 'Origin', value: 'https://site.example.test/' }],
+  }), 100);
+  await store.add(5, createCandidate(url, 200, {
+    requestHeaders: [
+      { name: 'User-Agent', value: 'riflo-test-agent' },
+      { name: 'Cookie', value: 'session=secret' },
+      { name: 'Authorization', value: 'Bearer secret' },
+    ],
+  }), 200);
+
+  const [candidate] = await store.get(5, 200);
+  assert.deepEqual(candidate.requestHeaders, {
+    origin: 'https://site.example.test',
+    user_agent: 'riflo-test-agent',
+  });
+  assert.equal('cookie' in candidate.requestHeaders, false);
+  assert.equal('authorization' in candidate.requestHeaders, false);
+});
+
 test('serializes concurrent read-modify-write operations across tabs', async () => {
   const storage = memoryStorage();
   const store = createCandidateStore(storage);

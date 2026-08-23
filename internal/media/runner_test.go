@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/dzaneyo/riflo/internal/app"
@@ -144,6 +147,193 @@ func TestRequestHeadersRejectCRLF(t *testing.T) {
 	_, err := makeHeaderArg("ok\nInjected: yes", "", "")
 	if err == nil {
 		t.Fatal("makeHeaderArg accepted CRLF injection")
+	}
+}
+
+func TestOriginHeaderIsNormalizedAndRejectsPageURLs(t *testing.T) {
+	request, err := normalizeRequestWithOrigin(
+		"https://media.example.test/master.m3u8",
+		"",
+		"https://watch.example.test/",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("normalizeRequestWithOrigin() error = %v", err)
+	}
+	if request.Origin != "https://watch.example.test" {
+		t.Fatalf("Origin = %q", request.Origin)
+	}
+	if _, err := normalizeRequestWithOrigin(
+		"https://media.example.test/master.m3u8",
+		"",
+		"https://watch.example.test/video?id=private",
+		"",
+		"",
+	); err == nil {
+		t.Fatal("normalizeRequestWithOrigin accepted a page URL as Origin")
+	}
+}
+
+func TestDownloadResolvesSelectedVariantWithTransientOrigin(t *testing.T) {
+	var masterRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/master.m3u8" {
+			http.NotFound(w, r)
+			return
+		}
+		masterRequests.Add(1)
+		if r.Header.Get("Origin") != "https://watch.example.test" {
+			t.Errorf("Origin = %q", r.Header.Get("Origin"))
+		}
+		if r.Header.Get("Referer") != "https://watch.example.test/video" {
+			t.Errorf("Referer = %q", r.Header.Get("Referer"))
+		}
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100,RESOLUTION=640x360\n"+
+			"/variants/low.m3u8?sig=variant-secret\n")
+	}))
+	defer server.Close()
+
+	argsPath := filepath.Join(t.TempDir(), "ffmpeg-args")
+	probe := fakeExecutable(t, "printf '%s' '{\"format\":{\"duration\":\"1.0\"}}'")
+	ffmpeg := fakeExecutable(t, fmt.Sprintf("printf '%%s\\n' \"$@\" > %s\nfor arg do last=\"$arg\"; done\nprintf 'progress=end\\n'\nprintf media > \"$last\"", shellQuote(argsPath)))
+	dir := t.TempDir()
+	index := 0
+	runner := NewRunner(probe, ffmpeg)
+	result, err := runner.Download(context.Background(), "task", app.CreateTaskRequest{
+		URL:             server.URL + "/master.m3u8?token=master-secret",
+		Referer:         "https://watch.example.test/video",
+		Origin:          "https://watch.example.test",
+		OutputDir:       dir,
+		OutputName:      "selected.mp4",
+		Format:          "mp4",
+		HLSVariantIndex: &index,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	if result.OutputPath != filepath.Join(dir, "selected.mp4") || masterRequests.Load() != 1 {
+		t.Fatalf("result=%+v master requests=%d", result, masterRequests.Load())
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "/variants/low.m3u8?sig=variant-secret") {
+		t.Fatalf("ffmpeg did not receive resolved variant URL: %q", args)
+	}
+	if !strings.Contains(string(args), "Origin: https://watch.example.test") {
+		t.Fatalf("ffmpeg did not receive transient Origin: %q", args)
+	}
+	if strings.Contains(result.OutputPath, "master-secret") {
+		t.Fatal("signed source query entered result")
+	}
+}
+
+func TestDownloadVariantUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100,RESOLUTION=640x360\nlow.m3u8\n")
+	}))
+	defer server.Close()
+	index := 1
+	runner := NewRunner("missing-ffprobe", "missing-ffmpeg")
+	_, err := runner.Download(context.Background(), "task", app.CreateTaskRequest{
+		URL: server.URL + "/master.m3u8", OutputDir: t.TempDir(), OutputName: "missing.mp4", Format: "mp4",
+		HLSVariantIndex: &index,
+	}, nil)
+	if !errors.Is(err, ErrVariantUnavailable) {
+		t.Fatalf("Download() error = %v, want ErrVariantUnavailable", err)
+	}
+}
+
+func TestInspectHLSRateLimitIsBoundedAndClassified(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	marker := filepath.Join(t.TempDir(), "ffprobe-ran")
+	probe := fakeExecutable(t, fmt.Sprintf("printf x > %s", shellQuote(marker)))
+	runner := NewRunner(probe, "missing-ffmpeg")
+	_, err := runner.Inspect(context.Background(), app.InspectRequest{URL: server.URL + "/master.m3u8"})
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("Inspect() error = %v, want ErrRateLimited", err)
+	}
+	if requests.Load() != hlsRequestAttempts {
+		t.Fatalf("request attempts = %d, want %d", requests.Load(), hlsRequestAttempts)
+	}
+	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("ffprobe ran after rate limit, stat error = %v", statErr)
+	}
+}
+
+func TestInspectHLSRetriesServerErrorsButNotClientErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		status       int
+		wantAttempts int32
+	}{
+		{name: "server error", status: http.StatusServiceUnavailable, wantAttempts: hlsRequestAttempts},
+		{name: "bad request", status: http.StatusBadRequest, wantAttempts: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(testCase.status)
+			}))
+			defer server.Close()
+
+			runner := NewRunner("missing-ffprobe", "missing-ffmpeg")
+			_, err := runner.Inspect(context.Background(), app.InspectRequest{URL: server.URL + "/master.m3u8"})
+			if !errors.Is(err, ErrHTTPStatus) {
+				t.Fatalf("Inspect() error = %v, want ErrHTTPStatus", err)
+			}
+			if requests.Load() != testCase.wantAttempts {
+				t.Fatalf("request attempts = %d, want %d", requests.Load(), testCase.wantAttempts)
+			}
+		})
+	}
+}
+
+func TestInspectHLSClassifiesExpiredURLWithoutRetry(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusGone)
+	}))
+	defer server.Close()
+
+	runner := NewRunner("missing-ffprobe", "missing-ffmpeg")
+	_, err := runner.Inspect(context.Background(), app.InspectRequest{URL: server.URL + "/master.m3u8"})
+	if !errors.Is(err, ErrURLExpired) {
+		t.Fatalf("Inspect() error = %v, want ErrURLExpired", err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("request attempts = %d, want 1", requests.Load())
+	}
+}
+
+func TestHTTPRetryArgsAreBounded(t *testing.T) {
+	argsPath := filepath.Join(t.TempDir(), "ffmpeg-args")
+	probe := fakeExecutable(t, "printf '%s' '{\"format\":{\"duration\":\"1.0\"}}'")
+	ffmpeg := fakeExecutable(t, fmt.Sprintf("printf '%%s\\n' \"$@\" > %s\nfor arg do last=\"$arg\"; done\nprintf 'progress=end\\n'\nprintf media > \"$last\"", shellQuote(argsPath)))
+	runner := NewRunner(probe, ffmpeg)
+	_, err := runner.Download(context.Background(), "task", app.CreateTaskRequest{
+		URL: "https://media.example.test/video.m3u8", OutputDir: t.TempDir(), OutputName: "retry.mp4", Format: "mp4",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Download() error = %v", err)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"-reconnect", "-reconnect_on_http_error", "429,500,502,503,504", "-reconnect_max_retries", "3", "-reconnect_delay_total_max", "10", "-seg_max_retry"} {
+		if !strings.Contains(string(args), want) {
+			t.Fatalf("ffmpeg args missing %q: %q", want, args)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import {
   displayURL,
   formatDetectionSources,
   normalizeHTTPURL,
+  normalizeRequestHeaders,
   normalizeRequestContext,
   REQUEST_CONTEXT_SOURCE_DOCUMENT,
 } from '../model.js';
@@ -51,6 +52,21 @@ test('candidate model keeps a redacted request context beside the full URL', () 
   });
   assert.equal(normalizeHTTPURL('javascript:alert(1)'), '');
   assert.equal(normalizeRequestContext({ url: 'file:///tmp/page', source: 'origin' }), null);
+});
+
+test('candidate model keeps only safe request headers', () => {
+  const candidate = createCandidate('https://cdn.example.test/master.m3u8', 1234, {
+    requestHeaders: [
+      { name: 'Origin', value: 'https://site.example.test/' },
+      { name: 'User-Agent', value: 'riflo-test-agent' },
+      { name: 'Cookie', value: 'session=secret' },
+    ],
+  });
+  assert.deepEqual(candidate.requestHeaders, {
+    origin: 'https://site.example.test',
+    user_agent: 'riflo-test-agent',
+  });
+  assert.deepEqual(normalizeRequestHeaders({ Cookie: 'session=secret' }), null);
 });
 
 test('handoff URL encodes source and referer without a cookie field', () => {

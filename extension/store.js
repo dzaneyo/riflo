@@ -1,5 +1,6 @@
 import {
   normalizeRequestContext,
+  normalizeRequestHeaders,
   requestContextStrength,
 } from './model.js';
 
@@ -31,6 +32,9 @@ function normalizeBuckets(value) {
       const requestContext = normalizeRequestContext(entry.requestContext);
       if (requestContext) normalized.requestContext = requestContext;
       else delete normalized.requestContext;
+      const requestHeaders = normalizeRequestHeaders(entry.requestHeaders);
+      if (requestHeaders) normalized.requestHeaders = requestHeaders;
+      else delete normalized.requestHeaders;
       return normalized;
     });
   }
@@ -70,6 +74,13 @@ function mergeRequestContext(existing, candidate) {
     : current;
 }
 
+function mergeRequestHeaders(existing, candidate) {
+  const current = normalizeRequestHeaders(existing) || {};
+  const incoming = normalizeRequestHeaders(candidate) || {};
+  const merged = { ...current, ...incoming };
+  return normalizeRequestHeaders(merged);
+}
+
 function mergeCandidate(existing, candidate, timestamp) {
   const next = {
     ...existing,
@@ -88,6 +99,9 @@ function mergeCandidate(existing, candidate, timestamp) {
   const requestContext = mergeRequestContext(existing.requestContext, candidate.requestContext);
   if (requestContext) next.requestContext = requestContext;
   else delete next.requestContext;
+  const requestHeaders = mergeRequestHeaders(existing.requestHeaders, candidate.requestHeaders);
+  if (requestHeaders) next.requestHeaders = requestHeaders;
+  else delete next.requestHeaders;
   return next;
 }
 
@@ -155,6 +169,9 @@ export function createCandidateStore(storageArea, options = {}) {
         const requestContext = normalizeRequestContext(candidate.requestContext);
         if (requestContext) entry.requestContext = requestContext;
         else delete entry.requestContext;
+        const requestHeaders = normalizeRequestHeaders(candidate.requestHeaders);
+        if (requestHeaders) entry.requestHeaders = requestHeaders;
+        else delete entry.requestHeaders;
         entries.push(entry);
       }
       buckets[key] = orderEntries(entries).slice(0, maxPerTab);

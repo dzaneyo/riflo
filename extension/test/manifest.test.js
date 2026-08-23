@@ -39,11 +39,22 @@ test('background and popup use the shared browser/chrome API alias', () => {
 
 test('background observes request and response phases and supports atomic removal', () => {
   assert.match(backgroundSource, /webRequest\.onBeforeRequest\.addListener/);
+  assert.match(backgroundSource, /webRequest\.onBeforeSendHeaders\.addListener/);
   assert.match(backgroundSource, /webRequest\.onHeadersReceived\.addListener/);
+  assert.match(backgroundSource, /\['requestHeaders'\]/);
+  assert.match(backgroundSource, /webRequest\.onCompleted\.addListener/);
+  assert.match(backgroundSource, /webRequest\.onErrorOccurred\.addListener/);
   assert.match(backgroundSource, /detectHLSRequest/);
   assert.match(backgroundSource, /type === ['"]remove-candidate['"]/);
   assert.match(popupSource, /type: ['"]remove-candidate['"]/);
   assert.match(popupSource, /formatDetectionSources/);
+});
+
+test('request header capture uses Chromium extraHeaders with a Firefox fallback', () => {
+  assert.match(backgroundSource, /\['requestHeaders', 'extraHeaders'\]/);
+  assert.match(backgroundSource, /catch\s*\{/);
+  assert.match(backgroundSource, /\['requestHeaders'\]/);
+  assert.doesNotMatch(backgroundSource, /webRequestBlocking|['"]blocking['"]/);
 });
 
 test('handoff prefers captured request context and keeps popup output redacted', () => {
@@ -52,4 +63,5 @@ test('handoff prefers captured request context and keeps popup output redacted',
   assert.match(popupSource, /requestContext\.displayUrl/);
   assert.match(handoffSource, /candidate\?\.requestContext/);
   assert.match(handoffSource, /normalizeHTTPURL\(currentTabURL\)/);
+  assert.match(handoffSource, /candidate\.requestHeaders/);
 });
