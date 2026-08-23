@@ -1,0 +1,1107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>riflo · 本地媒体下载</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4f6f8;
+        --panel: #ffffff;
+        --text: #18212b;
+        --muted: #66717d;
+        --line: #d9e0e7;
+        --line-strong: #bec8d2;
+        --accent: #1769d1;
+        --accent-dark: #0f4f9e;
+        --accent-soft: #eaf2ff;
+        --danger: #b42318;
+        --danger-soft: #fff0ee;
+        --success: #167348;
+        --success-soft: #eaf8f0;
+        --warning: #825f00;
+        --warning-soft: #fff8dd;
+        --shadow: 0 10px 28px rgba(31, 46, 61, .07);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        font-size: 16px;
+      }
+
+      * { box-sizing: border-box; }
+      body { min-width: 300px; margin: 0; background: var(--bg); color: var(--text); line-height: 1.5; }
+      button, input, select { font: inherit; }
+      button { cursor: pointer; }
+      button:disabled { cursor: wait; opacity: .62; }
+      button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 3px solid rgba(23, 105, 209, .28); outline-offset: 2px; }
+      [hidden] { display: none !important; }
+
+      .shell { width: min(100% - 2rem, 980px); margin: 0 auto; padding: 2rem 0 3rem; }
+      .site-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+      .brand { margin: 0; font-size: clamp(1.65rem, 4vw, 2.1rem); letter-spacing: -.035em; }
+      .tagline { margin: .2rem 0 0; color: var(--muted); font-size: .94rem; }
+      .health { display: inline-flex; align-items: center; gap: .45rem; min-height: 2rem; padding: .35rem .65rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); font-size: .82rem; white-space: nowrap; }
+      .health-dot { width: .55rem; height: .55rem; border-radius: 50%; background: #a2acb6; }
+      .health.ok { border-color: #b9e0c9; background: var(--success-soft); color: var(--success); }
+      .health.ok .health-dot { background: var(--success); }
+      .health.error { border-color: #f1c1bc; background: var(--danger-soft); color: var(--danger); }
+      .health.error .health-dot { background: var(--danger); }
+
+      .panel { margin-top: 1rem; padding: clamp(1rem, 3vw, 1.5rem); border: 1px solid var(--line); border-radius: .9rem; background: var(--panel); box-shadow: var(--shadow); }
+      .panel-heading, .subheading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+      h2, h3 { margin: 0; line-height: 1.25; }
+      h2 { font-size: 1.2rem; }
+      h3 { font-size: 1rem; }
+      .panel-intro { margin: .45rem 0 1.2rem; color: var(--muted); font-size: .9rem; }
+
+      .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+      .field-wide { grid-column: 1 / -1; }
+      .field { min-width: 0; }
+      label { display: block; margin-bottom: .35rem; color: #2b3742; font-size: .9rem; font-weight: 620; }
+      .required { color: var(--danger); font-size: .8rem; font-weight: 500; }
+      input, select { width: 100%; min-height: 2.7rem; padding: .55rem .7rem; border: 1px solid var(--line-strong); border-radius: .5rem; background: #fff; color: var(--text); }
+      input::placeholder { color: #8b97a3; }
+      input:hover, select:hover { border-color: #8e9baa; }
+      input:invalid:not(:placeholder-shown) { border-color: #d99a93; }
+      .help, .privacy-note, .field-note { margin: .35rem 0 0; color: var(--muted); font-size: .79rem; }
+      .privacy-note { margin-top: 1rem; padding: .65rem .75rem; border-radius: .5rem; background: #f7f9fb; }
+
+      details { margin: 1.15rem 0; border: 1px solid var(--line); border-radius: .6rem; }
+      summary { padding: .7rem .8rem; color: #2d3b48; cursor: pointer; font-size: .9rem; font-weight: 620; user-select: none; }
+      .details-body { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; padding: 0 .8rem .85rem; border-top: 1px solid var(--line); }
+      .details-body .field { padding-top: .8rem; }
+      .details-note { grid-column: 1 / -1; margin: 0; padding: .6rem .7rem; border-radius: .45rem; background: var(--warning-soft); color: var(--warning); font-size: .8rem; }
+
+      .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .65rem; margin-top: 1.2rem; }
+      .button { min-height: 2.65rem; padding: .5rem .95rem; border: 1px solid var(--line-strong); border-radius: .5rem; background: #fff; color: #263442; font-weight: 620; }
+      .button:hover:not(:disabled) { border-color: #8e9baa; background: #f8fafc; }
+      .button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+      .button.primary:hover:not(:disabled) { border-color: var(--accent-dark); background: var(--accent-dark); }
+      .button.small { min-height: 2.2rem; padding: .35rem .7rem; font-size: .84rem; }
+      .inline-message, .global-message { margin-top: .85rem; padding: .65rem .75rem; border-radius: .5rem; background: var(--accent-soft); color: #174d8f; font-size: .88rem; }
+      .inline-message.error, .global-message.error { background: var(--danger-soft); color: var(--danger); }
+      .inline-message.success, .global-message.success { background: var(--success-soft); color: var(--success); }
+
+      .inspect-result { margin-top: 1rem; }
+      .info-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 0; }
+      .info-item { padding: .7rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: #fbfcfd; }
+      .info-item dt { color: var(--muted); font-size: .78rem; }
+      .info-item dd { margin: .15rem 0 0; font-size: .92rem; font-weight: 620; overflow-wrap: anywhere; }
+      .inspect-note { margin: .75rem 0 0; padding: .6rem .7rem; border-radius: .45rem; background: var(--warning-soft); color: var(--warning); font-size: .82rem; }
+      .stream-heading { margin: 1.2rem 0 .55rem; }
+      .stream-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: .5rem; }
+      .stream-table { width: 100%; min-width: 35rem; border-collapse: collapse; font-size: .86rem; }
+      .stream-table th, .stream-table td { padding: .55rem .65rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+      .stream-table th { background: #f7f9fb; color: var(--muted); font-size: .78rem; font-weight: 620; }
+      .stream-table tr:last-child td { border-bottom: 0; }
+      .variant-table { min-width: 32rem; }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+      .task-toolbar { align-items: center; }
+      .task-count { margin-left: .3rem; color: var(--muted); font-size: .8rem; font-weight: 500; }
+      .task-groups { display: grid; grid-template-columns: 1fr; gap: 1.3rem; margin-top: 1.2rem; }
+      .task-group + .task-group { padding-top: 1.2rem; border-top: 1px solid var(--line); }
+      .task-list { display: grid; gap: .7rem; margin-top: .65rem; }
+      .empty-state { margin: 0; padding: 1rem; border: 1px dashed var(--line-strong); border-radius: .5rem; color: var(--muted); font-size: .88rem; text-align: center; }
+      .task-card { padding: .85rem; border: 1px solid var(--line); border-radius: .6rem; background: #fff; }
+      .task-card-head, .task-line, .progress-line { display: flex; align-items: baseline; justify-content: space-between; gap: .8rem; }
+      .task-card-head { align-items: flex-start; }
+      .task-name { min-width: 0; margin: 0; font-size: .95rem; overflow-wrap: anywhere; }
+      .status-badge { flex: 0 0 auto; padding: .18rem .48rem; border-radius: 999px; background: #edf0f3; color: #56616d; font-size: .75rem; font-weight: 620; }
+      .status-badge.running, .status-badge.queued { background: var(--accent-soft); color: #174d8f; }
+      .status-badge.succeeded { background: var(--success-soft); color: var(--success); }
+      .status-badge.failed, .status-badge.interrupted { background: var(--danger-soft); color: var(--danger); }
+      .status-badge.canceled { background: #f1f2f4; color: #59636e; }
+      .task-line { justify-content: flex-start; flex-wrap: wrap; margin-top: .55rem; color: var(--muted); font-size: .8rem; }
+      .task-line span { overflow-wrap: anywhere; }
+      .task-line .label { color: #465360; font-weight: 620; }
+      .progress-line { align-items: center; margin-top: .7rem; }
+      .progress-line progress { width: min(100%, 20rem); height: .62rem; accent-color: var(--accent); }
+      .progress-value { min-width: 5.5rem; color: var(--muted); font-size: .8rem; text-align: right; }
+      .task-error { margin: .65rem 0 0; padding: .55rem .65rem; border-radius: .4rem; background: var(--danger-soft); color: var(--danger); font-size: .82rem; overflow-wrap: anywhere; }
+      .task-actions { display: flex; justify-content: flex-end; margin-top: .7rem; }
+      .footer-note { margin: 1.2rem 0 0; color: var(--muted); font-size: .78rem; text-align: center; }
+
+      @media (max-width: 700px) {
+        .shell { width: min(100% - 1rem, 980px); padding-top: 1rem; }
+        .site-header { align-items: flex-start; flex-direction: column; gap: .7rem; }
+        .health { align-self: flex-start; }
+        .field-grid, .details-body, .info-grid { grid-template-columns: 1fr; }
+        .details-note, .field-wide { grid-column: auto; }
+        .actions { justify-content: stretch; }
+        .actions .button { flex: 1 1 10rem; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="site-header">
+        <div>
+          <h1 class="brand">riflo</h1>
+          <p class="tagline">简单、可靠的本地媒体下载</p>
+        </div>
+        <div id="healthStatus" class="health" role="status" aria-live="polite">
+          <span class="health-dot" aria-hidden="true"></span>
+          <span id="healthText">正在检查本地服务…</span>
+        </div>
+      </header>
+
+      <div id="globalMessage" class="global-message" role="alert" aria-live="polite" hidden></div>
+
+      <main>
+        <section class="panel" aria-labelledby="createHeading">
+          <div class="panel-heading">
+            <h2 id="createHeading">创建下载任务</h2>
+          </div>
+          <p class="panel-intro">粘贴一个 FFmpeg 可以处理的媒体地址，选择保存位置后开始下载。</p>
+
+          <form id="taskForm" autocomplete="off" novalidate>
+            <div class="field-grid">
+              <div class="field field-wide">
+                <label for="mediaUrl">媒体 URL <span class="required">（必填）</span></label>
+                <input id="mediaUrl" type="url" inputmode="url" placeholder="https://example.com/video.m3u8" spellcheck="false" required aria-describedby="mediaUrlHelp">
+                <p id="mediaUrlHelp" class="help">地址只在本次检查或任务请求中使用；带签名参数的地址提交成功后会从输入框清除。</p>
+              </div>
+
+              <div class="field">
+                <label for="outputDir">输出目录</label>
+                <input id="outputDir" type="text" placeholder="例如：/Users/你/Downloads" autocomplete="off" spellcheck="false">
+              </div>
+
+              <div class="field">
+                <label for="outputName">文件名</label>
+                <input id="outputName" type="text" placeholder="例如：我的视频" autocomplete="off" spellcheck="false">
+              </div>
+
+              <div class="field">
+                <label for="format">输出格式</label>
+                <select id="format">
+                  <option value="mp4">MP4（推荐）</option>
+                  <option value="mkv">MKV</option>
+                </select>
+              </div>
+            </div>
+
+            <details id="requestDetails">
+              <summary>高级请求信息（可选）</summary>
+              <div class="details-body">
+                <div class="field">
+                  <label for="referer">Referer</label>
+                  <input id="referer" type="url" inputmode="url" placeholder="https://example.com/watch" autocomplete="off" spellcheck="false">
+                </div>
+
+                <div class="field">
+                  <label for="userAgent">User-Agent</label>
+                  <input id="userAgent" type="text" placeholder="留空使用默认值" autocomplete="off" spellcheck="false">
+                </div>
+
+                <div class="field">
+                  <label for="cookie">Cookie</label>
+                  <input id="cookie" type="password" placeholder="仅在本次请求使用" autocomplete="new-password" spellcheck="false">
+                </div>
+
+                <p class="details-note">Referer、User-Agent 和 Cookie 只在本次检查或下载请求的内存中使用，不会写入任务历史或页面存储。任务创建成功后会立即清空。</p>
+              </div>
+            </details>
+
+            <div class="actions">
+              <button id="inspectButton" class="button" type="button">检查媒体</button>
+              <button id="startButton" class="button primary" type="submit">开始下载</button>
+            </div>
+            <div id="formMessage" class="inline-message" role="status" aria-live="polite" hidden></div>
+          </form>
+        </section>
+
+        <section id="inspectPanel" class="panel" aria-labelledby="inspectHeading" hidden>
+          <div class="panel-heading">
+            <h2 id="inspectHeading">媒体信息</h2>
+          </div>
+          <div id="inspectResult" class="inspect-result"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="tasksHeading">
+          <div class="panel-heading task-toolbar">
+            <h2 id="tasksHeading">任务</h2>
+            <button id="refreshButton" class="button small" type="button">刷新</button>
+          </div>
+          <div id="taskMessage" class="inline-message" role="status" aria-live="polite" hidden></div>
+
+          <div class="task-groups">
+            <section class="task-group" aria-labelledby="activeHeading">
+              <div class="subheading">
+                <h3 id="activeHeading">当前任务 <span id="activeCount" class="task-count"></span></h3>
+              </div>
+              <div id="activeTasks" class="task-list"></div>
+            </section>
+
+            <section class="task-group" aria-labelledby="historyHeading">
+              <div class="subheading">
+                <h3 id="historyHeading">历史记录</h3>
+              </div>
+              <div id="historyTasks" class="task-list"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <p class="footer-note">riflo 只接受本机访问。关闭此页面不会停止已经提交的任务。</p>
+    </div>
+
+    <script>
+      (function () {
+        'use strict';
+
+        var ACTIVE_STATUSES = { queued: true, running: true };
+        var HANDOFF_SOURCE_LIMIT = 64 * 1024;
+        var HANDOFF_REFERER_LIMIT = 8 * 1024;
+        var STATUS_LABELS = {
+          queued: '排队中',
+          running: '下载中',
+          succeeded: '已完成',
+          failed: '失败',
+          canceled: '已取消',
+          interrupted: '已中断'
+        };
+        var ERROR_LABELS = {
+          forbidden_host: '仅支持从本机地址访问。',
+          invalid_request: '请求参数不完整或无效。',
+          not_implemented: '此功能尚未实现，请检查服务版本。',
+          internal_error: '本地服务暂时不可用，请稍后重试。',
+          task_not_found: '找不到该任务，可能已经被清理。',
+          ffmpeg_unavailable: '找不到 ffmpeg，请先运行 riflo doctor。',
+          ffprobe_unavailable: '找不到 ffprobe，请先运行 riflo doctor。',
+          media_unavailable: '无法读取媒体，请检查地址和访问权限。',
+          media_access_denied: '媒体服务器拒绝访问，请检查页面 Referer；如果需要登录，请在“高级请求信息”中手工补充 Cookie。Cookie 只在本次请求使用，不会保存。',
+          unauthorized: '媒体服务器要求身份验证，请检查或补充 Referer 或 Cookie。',
+          forbidden: '媒体服务器拒绝访问，请检查或补充 Referer 或 Cookie。',
+          media_unauthorized: '媒体服务器要求身份验证，请检查或补充 Referer 或 Cookie。',
+          media_forbidden: '媒体服务器拒绝访问，请检查或补充 Referer 或 Cookie。',
+          http_401: '媒体服务器要求身份验证，请检查或补充 Referer 或 Cookie。',
+          http_403: '媒体服务器拒绝访问，请检查或补充 Referer 或 Cookie。',
+          canceled: '任务已取消。'
+        };
+
+        var mediaUrl = document.getElementById('mediaUrl');
+        var referer = document.getElementById('referer');
+        var userAgent = document.getElementById('userAgent');
+        var cookie = document.getElementById('cookie');
+        var outputDir = document.getElementById('outputDir');
+        var outputName = document.getElementById('outputName');
+        var format = document.getElementById('format');
+        var taskForm = document.getElementById('taskForm');
+        var inspectButton = document.getElementById('inspectButton');
+        var startButton = document.getElementById('startButton');
+        var formMessage = document.getElementById('formMessage');
+        var globalMessage = document.getElementById('globalMessage');
+        var inspectPanel = document.getElementById('inspectPanel');
+        var inspectResult = document.getElementById('inspectResult');
+        var refreshButton = document.getElementById('refreshButton');
+        var taskMessage = document.getElementById('taskMessage');
+        var activeTasks = document.getElementById('activeTasks');
+        var historyTasks = document.getElementById('historyTasks');
+        var activeCount = document.getElementById('activeCount');
+        var healthStatus = document.getElementById('healthStatus');
+        var healthText = document.getElementById('healthText');
+
+        var taskData = [];
+        var taskRequestInFlight = false;
+        var healthRequestInFlight = false;
+        var formRequestInFlight = false;
+        var pollTimer = 0;
+
+        function createElement(tag, className, text) {
+          var element = document.createElement(tag);
+          if (className) {
+            element.className = className;
+          }
+          if (text !== undefined && text !== null) {
+            element.textContent = String(text);
+          }
+          return element;
+        }
+
+        function setMessage(element, message, kind) {
+          element.replaceChildren();
+          if (!message) {
+            element.hidden = true;
+            element.className = element === globalMessage ? 'global-message' : 'inline-message';
+            return;
+          }
+          element.textContent = String(message);
+          element.hidden = false;
+          element.className = element === globalMessage ? 'global-message' : 'inline-message';
+          if (kind) {
+            element.classList.add(kind);
+          }
+        }
+
+        function setHealth(healthy, message) {
+          healthStatus.classList.toggle('ok', healthy);
+          healthStatus.classList.toggle('error', !healthy);
+          healthText.textContent = message;
+        }
+
+        function friendlyError(error) {
+          if (!error) {
+            return '请求失败，请稍后重试。';
+          }
+          if (error.code === 'network_error') {
+            return '无法连接到本地服务，请确认 riflo serve 正在运行。';
+          }
+          if (isAuthenticationError(error)) {
+            return '媒体服务器拒绝了本次请求（401/403）。请检查页面 Referer；如果需要登录，请在“高级请求信息”中手工补充 Cookie。Cookie 只在本次检查或下载请求中使用，不会保存。';
+          }
+          if (ERROR_LABELS[error.code]) {
+            return ERROR_LABELS[error.code];
+          }
+          var message = redactError(error.message);
+          return message || '请求失败，请稍后重试。';
+        }
+
+        function isAuthenticationError(error) {
+          if (!error || typeof error !== 'object') {
+            return false;
+          }
+          var code = typeof error.code === 'string' ? error.code.toLowerCase() : '';
+          var status = Number(error.status);
+          if (status === 401 || status === 403) {
+            return true;
+          }
+          if (/(?:^|[_-])(401|403)(?:$|[_-])/.test(code) || /(?:unauthori[sz]ed|forbidden|access[_ -]?denied|auth(?:entication)?[_ -]?required)/.test(code)) {
+            return true;
+          }
+          var message = typeof error.message === 'string' ? error.message : '';
+          return /(?:\b401\b|\b403\b|unauthori[sz]ed|forbidden|access denied|authentication required)/i.test(message);
+        }
+
+        function redactError(value) {
+          var message = typeof value === 'string' ? value : '';
+          if (!message) {
+            return '';
+          }
+          message = message.replace(/https?:\/\/[^\s"'<>]+/gi, function (value) {
+            try {
+              var url = new URL(value);
+              return url.origin + url.pathname;
+            } catch (error) {
+              return '[地址已隐藏]';
+            }
+          });
+          message = message.replace(/\b(cookie|authorization|proxy-authorization|referer|user-agent)\s*[:=]\s*[^\r\n;,]+/gi, '$1: [已隐藏]');
+          message = message.replace(/\b(token|signature|sig|auth|key|session|password|passwd)(?:[_-]?(?:token|id))?\s*=\s*[^&\s;,]+/gi, '$1=[已隐藏]');
+          message = message.replace(/[\r\n\t]+/g, ' ').trim();
+          if (message.length > 240) {
+            message = message.slice(0, 237) + '…';
+          }
+          return message;
+        }
+
+        function makeAPIError(code, message, status) {
+          var error = new Error('api request failed');
+          error.code = typeof code === 'string' ? code : '';
+          error.message = typeof message === 'string' ? message : '';
+          error.status = status || 0;
+          return error;
+        }
+
+        async function apiRequest(path, options) {
+          var response;
+          try {
+            response = await fetch(path, options || {});
+          } catch (error) {
+            throw makeAPIError('network_error', '', 0);
+          }
+
+          var payload = null;
+          try {
+            payload = await response.json();
+          } catch (error) {
+            payload = null;
+          }
+
+          if (!response.ok) {
+            var apiError = payload && payload.error ? payload.error : {};
+            throw makeAPIError(apiError.code, apiError.message, response.status);
+          }
+          return payload;
+        }
+
+        function jsonOptions(method, body) {
+          return {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          };
+        }
+
+        function readTransientRequest() {
+          return {
+            url: mediaUrl.value.trim(),
+            referer: referer.value.trim(),
+            user_agent: userAgent.value.trim(),
+            cookie: cookie.value
+          };
+        }
+
+        function readTaskRequest() {
+          var request = readTransientRequest();
+          request.output_dir = outputDir.value.trim();
+          request.output_name = outputName.value.trim();
+          request.format = format.value;
+          return request;
+        }
+
+        function validateURL() {
+          if (mediaUrl.value.trim()) {
+            mediaUrl.setCustomValidity('');
+            return true;
+          }
+          mediaUrl.setCustomValidity('请输入媒体 URL');
+          mediaUrl.reportValidity();
+          return false;
+        }
+
+        function setFormBusy(busy) {
+          formRequestInFlight = busy;
+          inspectButton.disabled = busy;
+          startButton.disabled = busy;
+          taskForm.setAttribute('aria-busy', busy ? 'true' : 'false');
+          startButton.textContent = busy ? '提交中…' : '开始下载';
+        }
+
+        function clearSensitiveInputs() {
+          mediaUrl.value = '';
+          referer.value = '';
+          userAgent.value = '';
+          cookie.value = '';
+        }
+
+        function utf8ByteLength(value) {
+          if (typeof TextEncoder === 'function') {
+            return new TextEncoder().encode(value).length;
+          }
+          try {
+            return encodeURIComponent(value).replace(/%[0-9A-F]{2}|./g, 'x').length;
+          } catch (error) {
+            return Infinity;
+          }
+        }
+
+        function validHTTPURL(value, maxBytes) {
+          if (typeof value !== 'string' || !value || utf8ByteLength(value) > maxBytes) {
+            return '';
+          }
+          var candidate = value.trim();
+          if (!candidate || utf8ByteLength(candidate) > maxBytes) {
+            return '';
+          }
+          try {
+            var parsed = new URL(candidate);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+              return '';
+            }
+          } catch (error) {
+            return '';
+          }
+          return candidate;
+        }
+
+        function clearFragment() {
+          window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
+        }
+
+        function receiveExtensionHandoff() {
+          var hash = window.location.hash;
+          if (!hash || hash === '#') {
+            return;
+          }
+
+          var params;
+          try {
+            params = new URLSearchParams(hash.slice(1));
+          } catch (error) {
+            return;
+          }
+          if (params.get('from') !== 'extension') {
+            return;
+          }
+
+          var source = validHTTPURL(params.get('source') || '', HANDOFF_SOURCE_LIMIT);
+          var incomingReferer = params.get('referer') || '';
+          var handoffReferer = incomingReferer ? validHTTPURL(incomingReferer, HANDOFF_REFERER_LIMIT) : '';
+          clearFragment();
+
+          if (!source || (incomingReferer && !handoffReferer)) {
+            setMessage(globalMessage, '扩展候选无效或过长，已忽略。', 'error');
+            return;
+          }
+
+          mediaUrl.value = source;
+          if (handoffReferer) {
+            referer.value = handoffReferer;
+          }
+          setMessage(globalMessage, '已从扩展接收候选，请确认后检查或下载。', 'success');
+        }
+
+        function formatDuration(value) {
+          if (value === null || value === undefined || value === '') {
+            return '未知';
+          }
+          var milliseconds = Number(value);
+          if (!Number.isFinite(milliseconds) || milliseconds < 0) {
+            return '未知';
+          }
+          var totalSeconds = Math.round(milliseconds / 1000);
+          var hours = Math.floor(totalSeconds / 3600);
+          var minutes = Math.floor((totalSeconds % 3600) / 60);
+          var seconds = totalSeconds % 60;
+          if (hours > 0) {
+            return hours + ':' + String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+          }
+          return minutes + ':' + String(seconds).padStart(2, '0');
+        }
+
+        function formatBytes(value) {
+          if (value === null || value === undefined || value === '') {
+            return '未知';
+          }
+          var bytes = Number(value);
+          if (!Number.isFinite(bytes) || bytes < 0) {
+            return '未知';
+          }
+          if (bytes < 1024) {
+            return Math.round(bytes) + ' B';
+          }
+          var units = ['KB', 'MB', 'GB', 'TB'];
+          var size = bytes;
+          var unit = 'B';
+          for (var i = 0; i < units.length && size >= 1024; i += 1) {
+            size /= 1024;
+            unit = units[i];
+          }
+          return size.toFixed(size >= 100 ? 0 : size >= 10 ? 1 : 2) + ' ' + unit;
+        }
+
+        function formatTime(value) {
+          if (!value) {
+            return '时间未知';
+          }
+          var date = new Date(value);
+          if (Number.isNaN(date.getTime())) {
+            return '时间未知';
+          }
+          return date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function appendInfoItem(parent, label, value) {
+          var item = createElement('div', 'info-item');
+          item.appendChild(createElement('dt', '', label));
+          item.appendChild(createElement('dd', '', value === undefined || value === null || value === '' ? '未知' : value));
+          parent.appendChild(item);
+        }
+
+        function streamKind(value) {
+          var labels = { video: '视频', audio: '音频', subtitle: '字幕', data: '数据' };
+          return labels[value] || (value ? '其他' : '未知');
+        }
+
+        function streamDetails(stream) {
+          if (!stream || typeof stream !== 'object') {
+            return '未知';
+          }
+          if (stream.kind === 'video' && Number(stream.width) > 0 && Number(stream.height) > 0) {
+            return String(stream.width) + ' × ' + String(stream.height);
+          }
+          if (stream.kind === 'audio' && Number(stream.channels) > 0) {
+            return String(stream.channels) + ' 声道';
+          }
+          return '—';
+        }
+
+        function isObject(value) {
+          return value !== null && typeof value === 'object' && !Array.isArray(value);
+        }
+
+        function firstValue() {
+          for (var i = 0; i < arguments.length; i += 1) {
+            var value = arguments[i];
+            if (value !== undefined && value !== null && value !== '') {
+              return value;
+            }
+          }
+          return undefined;
+        }
+
+        function hlsSummary(info) {
+          if (!isObject(info)) {
+            return null;
+          }
+          var nested = firstValue(info.hls, info.hls_summary, info.hls_info, info.playlist);
+          if (isObject(nested)) {
+            return nested;
+          }
+          var fields = ['playlist_type', 'playlistType', 'availability', 'is_live', 'isLive', 'live', 'vod', 'variants', 'segment_count', 'segmentCount', 'encrypted', 'encryption', 'encryption_methods', 'encryptionMethods', 'segment_type', 'segmentType', 'segment_format', 'segmentFormat', 'fmp4', 'has_fmp4', 'byterange', 'byte_range', 'has_byterange'];
+          return fields.some(function (field) { return Object.prototype.hasOwnProperty.call(info, field); }) ? info : null;
+        }
+
+        function booleanValue() {
+          for (var i = 0; i < arguments.length; i += 1) {
+            var value = arguments[i];
+            if (typeof value === 'boolean') {
+              return value;
+            }
+            if (typeof value === 'number' && (value === 0 || value === 1)) {
+              return value === 1;
+            }
+            if (typeof value === 'string') {
+              if (/^(true|yes|1|live|vod)$/i.test(value)) {
+                return !/^vod$/i.test(value);
+              }
+              if (/^(false|no|0)$/i.test(value)) {
+                return false;
+              }
+            }
+          }
+          return undefined;
+        }
+
+        function formatPlaylistMode(summary) {
+          var playlistType = firstValue(summary.playlist_type, summary.playlistType, summary.type);
+          var normalizedType = typeof playlistType === 'string' ? playlistType.toLowerCase() : '';
+          var availability = firstValue(summary.availability, summary.mode, summary.live_vod, summary.liveVOD);
+          var normalizedAvailability = typeof availability === 'string' ? availability.toLowerCase() : '';
+          var isLive = booleanValue(summary.is_live, summary.isLive, summary.live);
+          if (isLive === undefined && summary.vod !== undefined) {
+            var isVOD = booleanValue(summary.vod);
+            if (isVOD !== undefined) {
+              isLive = !isVOD;
+            }
+          }
+          if (isLive === true || normalizedAvailability === 'live' || normalizedAvailability === 'event' || normalizedType === 'live' || normalizedType === 'event') {
+            return 'Live';
+          }
+          if (isLive === false || normalizedAvailability === 'vod' || normalizedAvailability === 'video-on-demand' || normalizedType === 'vod' || normalizedType === 'video-on-demand') {
+            return 'VOD';
+          }
+          if (normalizedAvailability === 'unknown' || normalizedType === 'unknown') {
+            return '未知';
+          }
+          return availability || playlistType || '未知';
+        }
+
+        function formatPlaylistType(summary) {
+          var value = firstValue(summary.playlist_type, summary.playlistType, summary.type, summary.kind);
+          if (typeof value !== 'string') {
+            return 'HLS';
+          }
+          var normalized = value.toLowerCase();
+          if (normalized === 'master' || normalized === 'multivariant' || normalized === 'multivariant_playlist') {
+            return '主清单（多画质）';
+          }
+          if (normalized === 'media' || normalized === 'media_playlist') {
+            return '媒体清单';
+          }
+          return value;
+        }
+
+        function formatBandwidth(value) {
+          var bandwidth = Number(value);
+          if (!Number.isFinite(bandwidth) || bandwidth <= 0) {
+            return '未知';
+          }
+          if (bandwidth >= 1000000) {
+            return (bandwidth / 1000000).toFixed(bandwidth >= 10000000 ? 0 : 1) + ' Mbps';
+          }
+          if (bandwidth >= 1000) {
+            return Math.round(bandwidth / 1000) + ' kbps';
+          }
+          return Math.round(bandwidth) + ' bps';
+        }
+
+        function formatResolution(variant) {
+          if (!isObject(variant)) {
+            return '未知';
+          }
+          var resolution = firstValue(variant.resolution, variant.resolution_label, variant.resolutionLabel);
+          if (resolution) {
+            return String(resolution);
+          }
+          var width = Number(firstValue(variant.width, variant.video_width));
+          var height = Number(firstValue(variant.height, variant.video_height));
+          if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+            return Math.round(width) + ' × ' + Math.round(height);
+          }
+          return '未知';
+        }
+
+        function variantList(summary) {
+          var values = firstValue(summary.variants, summary.variant_streams, summary.renditions);
+          return Array.isArray(values) ? values : [];
+        }
+
+        function renderVariantTable(parent, variants) {
+          if (!variants.length) {
+            return;
+          }
+          var tableWrap = createElement('div', 'stream-table-wrap');
+          var table = createElement('table', 'stream-table variant-table');
+          table.appendChild(createElement('caption', 'sr-only', 'HLS 可用画质'));
+          var head = createElement('thead');
+          var headRow = createElement('tr');
+          ['分辨率', '带宽', '编码'].forEach(function (label) { headRow.appendChild(createElement('th', '', label)); });
+          head.appendChild(headRow);
+          table.appendChild(head);
+          var body = createElement('tbody');
+          variants.forEach(function (variant) {
+            if (!isObject(variant)) {
+              return;
+            }
+            var row = createElement('tr');
+            row.appendChild(createElement('td', '', formatResolution(variant)));
+            row.appendChild(createElement('td', '', formatBandwidth(firstValue(variant.bandwidth, variant.bandwidth_bps, variant.average_bandwidth, variant.averageBandwidth))));
+            row.appendChild(createElement('td', '', firstValue(variant.codecs, variant.codec, variant.video_codec, variant.videoCodec) || '—'));
+            body.appendChild(row);
+          });
+          if (!body.childNodes.length) {
+            return;
+          }
+          parent.appendChild(createElement('h3', 'stream-heading', '可用画质'));
+          table.appendChild(body);
+          tableWrap.appendChild(table);
+          parent.appendChild(tableWrap);
+        }
+
+        function formatEncryption(summary) {
+          var value = firstValue(summary.encryption, summary.encryption_method, summary.key_method, summary.keyMethod);
+          if (isObject(value)) {
+            value = firstValue(value.method, value.type, value.name);
+          }
+          if (value) {
+            return String(value);
+          }
+          var methods = firstValue(summary.encryption_methods, summary.encryptionMethods);
+          if (Array.isArray(methods)) {
+            var methodLabels = methods.filter(function (method) { return method !== undefined && method !== null && method !== ''; }).map(function (method) { return String(method); });
+            return methodLabels.length ? methodLabels.join('、') : '未检测到';
+          }
+          var encrypted = booleanValue(summary.encrypted, summary.is_encrypted, summary.has_key);
+          if (encrypted === true) {
+            return '已检测到加密';
+          }
+          if (encrypted === false) {
+            return '未检测到';
+          }
+          if (summary.playlist_type || summary.playlistType) {
+            return '未检测到';
+          }
+          return '未知';
+        }
+
+        function formatSegmentType(summary) {
+          var types = firstValue(summary.segment_types, summary.segmentTypes);
+          var labels = [];
+          if (Array.isArray(types)) {
+            types.forEach(function (type) {
+              if (type !== undefined && type !== null && type !== '') { labels.push(String(type)); }
+            });
+          } else if (types) {
+            labels.push(String(types));
+          }
+          var segmentFormat = firstValue(summary.segment_format, summary.segmentFormat);
+          if (segmentFormat) {
+            var normalizedFormat = String(segmentFormat).toLowerCase();
+            if (normalizedFormat !== 'unknown') {
+              var formatLabel = normalizedFormat === 'fmp4' || normalizedFormat === 'fragmented_mp4' || normalizedFormat === 'fragmented-mp4' ? 'fMP4' : normalizedFormat === 'ts' || normalizedFormat === 'mpegts' || normalizedFormat === 'mpeg-ts' ? 'TS' : String(segmentFormat);
+              if (!labels.some(function (value) { return value.toLowerCase() === formatLabel.toLowerCase(); })) { labels.push(formatLabel); }
+            }
+          }
+          var fmp4 = booleanValue(summary.fmp4, summary.is_fmp4, summary.has_fmp4, summary.fragmented_mp4);
+          var byterange = booleanValue(summary.byterange, summary.byte_range, summary.has_byterange, summary.hasByteRange);
+          if (fmp4 === true && !labels.some(function (value) { return /fmp4|fragmented/i.test(value); })) { labels.push('fMP4'); }
+          if (byterange === true && !labels.some(function (value) { return /byte.?range/i.test(value); })) { labels.push('BYTERANGE'); }
+          return labels.length ? labels.join('、') : '未知';
+        }
+
+        function formatSegmentCount(summary) {
+          var value = firstValue(summary.segment_count, summary.segmentCount, summary.segments);
+          if (Array.isArray(value)) {
+            value = value.length;
+          }
+          var count = Number(value);
+          var playlistType = String(firstValue(summary.playlist_type, summary.playlistType, summary.type) || '').toLowerCase();
+          if ((playlistType === 'master' || playlistType === 'multivariant') && count === 0) {
+            return '不适用';
+          }
+          return Number.isFinite(count) && count >= 0 ? String(Math.round(count)) : '未知';
+        }
+
+        function renderHLSInfo(parent, info) {
+          var summary = hlsSummary(info);
+          if (!summary) {
+            return;
+          }
+          var variants = variantList(summary);
+          var hasSummary = firstValue(summary.playlist_type, summary.playlistType, summary.type, summary.is_live, summary.isLive, summary.live, summary.vod, summary.segment_count, summary.segmentCount, summary.segments, summary.encryption, summary.encrypted, summary.segment_type, summary.segmentType, summary.fmp4, summary.has_fmp4, summary.byterange, summary.has_byterange) !== undefined;
+          if (!hasSummary && !variants.length) {
+            return;
+          }
+          parent.appendChild(createElement('h3', 'stream-heading', 'HLS 预检'));
+          var summaryGrid = createElement('dl', 'info-grid');
+          appendInfoItem(summaryGrid, '播放列表', formatPlaylistType(summary));
+          appendInfoItem(summaryGrid, '类型', formatPlaylistMode(summary));
+          appendInfoItem(summaryGrid, '加密', formatEncryption(summary));
+          appendInfoItem(summaryGrid, '分片', formatSegmentType(summary));
+          appendInfoItem(summaryGrid, '分片数量', formatSegmentCount(summary));
+          parent.appendChild(summaryGrid);
+          renderVariantTable(parent, variants);
+          if (variants.length > 1) {
+            parent.appendChild(createElement('p', 'inspect-note', '检测到多档画质；当前下载使用 FFmpeg 的默认最佳可用流策略，Web UI 暂不单独选择画质。'));
+          }
+        }
+
+        function renderInspect(info) {
+          inspectPanel.hidden = false;
+          inspectResult.replaceChildren();
+          var summary = createElement('dl', 'info-grid');
+          appendInfoItem(summary, '格式', info && info.format);
+          appendInfoItem(summary, '时长', formatDuration(info && info.duration_ms));
+          appendInfoItem(summary, '大小', formatBytes(info && info.size_bytes));
+          inspectResult.appendChild(summary);
+
+          renderHLSInfo(inspectResult, info || {});
+
+          inspectResult.appendChild(createElement('h3', 'stream-heading', '媒体轨道'));
+          var streams = info && Array.isArray(info.streams) ? info.streams : [];
+          if (!streams.length) {
+            inspectResult.appendChild(createElement('p', 'empty-state', '服务没有返回轨道信息。'));
+            return;
+          }
+
+          var tableWrap = createElement('div', 'stream-table-wrap');
+          var table = createElement('table', 'stream-table');
+          var caption = createElement('caption', 'sr-only', '检测到的媒体轨道');
+          table.appendChild(caption);
+          var head = createElement('thead');
+          var headRow = createElement('tr');
+          ['类型', '编码', '语言', '详情'].forEach(function (label) { headRow.appendChild(createElement('th', '', label)); });
+          head.appendChild(headRow);
+          table.appendChild(head);
+          var body = createElement('tbody');
+          streams.forEach(function (stream) {
+            var row = createElement('tr');
+            row.appendChild(createElement('td', '', streamKind(stream && stream.kind)));
+            row.appendChild(createElement('td', '', stream && stream.codec ? stream.codec : '—'));
+            row.appendChild(createElement('td', '', stream && stream.language ? stream.language : '—'));
+            row.appendChild(createElement('td', '', streamDetails(stream)));
+            body.appendChild(row);
+          });
+          table.appendChild(body);
+          tableWrap.appendChild(table);
+          inspectResult.appendChild(tableWrap);
+        }
+
+        function taskStatus(task) {
+          var value = task && typeof task.status === 'string' ? task.status : '';
+          return STATUS_LABELS[value] || '状态未知';
+        }
+
+        function outputPath(task) {
+          var directory = task && typeof task.output_dir === 'string' ? task.output_dir : '';
+          var name = task && typeof task.output_name === 'string' ? task.output_name : '';
+          if (!directory) { return name || '未指定'; }
+          if (!name) { return directory; }
+          return directory.replace(/[\\/]$/, '') + '/' + name;
+        }
+
+        function progressKnown(task) {
+          if (!task || typeof task !== 'object') { return false; }
+          if (task.status === 'succeeded') { return true; }
+          var progress = Number(task.progress);
+          return Number.isFinite(progress) && progress > 0 && progress <= 1;
+        }
+
+        function appendTaskMeta(parent, label, value) {
+          var line = createElement('div', 'task-line');
+          line.appendChild(createElement('span', 'label', label));
+          line.appendChild(createElement('span', '', value));
+          parent.appendChild(line);
+        }
+
+        function renderProgress(parent, task) {
+          var line = createElement('div', 'progress-line');
+          if (progressKnown(task)) {
+            var value = task.status === 'succeeded' ? 1 : Number(task.progress);
+            value = Math.max(0, Math.min(1, value));
+            var progress = document.createElement('progress');
+            progress.max = 100;
+            progress.value = Math.round(value * 100);
+            progress.setAttribute('aria-label', '下载进度');
+            line.appendChild(progress);
+            line.appendChild(createElement('span', 'progress-value', Math.round(value * 100) + '%'));
+          } else {
+            var unknown = task && task.status === 'queued' ? '等待开始' : task && task.status === 'running' ? '处理中（进度未知）' : '进度未知';
+            line.appendChild(createElement('span', 'progress-value', unknown));
+          }
+          parent.appendChild(line);
+        }
+
+        function renderTaskCard(task) {
+          var card = createElement('article', 'task-card');
+          var head = createElement('div', 'task-card-head');
+          head.appendChild(createElement('h4', 'task-name', task && task.output_name ? task.output_name : '未命名文件'));
+          var statusClass = task && STATUS_LABELS[task.status] ? task.status : '';
+          head.appendChild(createElement('span', 'status-badge ' + statusClass, taskStatus(task)));
+          card.appendChild(head);
+          appendTaskMeta(card, '来源', task && task.source_display ? task.source_display : '未提供');
+          appendTaskMeta(card, '文件', outputPath(task));
+          appendTaskMeta(card, '时间', '创建于 ' + formatTime(task && task.created_at) + ' · 更新于 ' + formatTime(task && task.updated_at));
+          if (task && Number(task.bytes_done) > 0) { appendTaskMeta(card, '已处理', formatBytes(task.bytes_done)); }
+          renderProgress(card, task);
+
+          if (task && task.error_message) {
+            var error = createElement('p', 'task-error');
+            error.appendChild(createElement('strong', '', '错误：'));
+            error.appendChild(document.createTextNode(redactError(task.error_message)));
+            card.appendChild(error);
+          }
+
+          if (task && ACTIVE_STATUSES[task.status] && task.id) {
+            var actionRow = createElement('div', 'task-actions');
+            var cancel = createElement('button', 'button small', '取消任务');
+            cancel.type = 'button';
+            cancel.addEventListener('click', function () { cancelTask(String(task.id), cancel); });
+            actionRow.appendChild(cancel);
+            card.appendChild(actionRow);
+          }
+          return card;
+        }
+
+        function renderTaskList(container, tasks, emptyText) {
+          container.replaceChildren();
+          if (!tasks.length) {
+            container.appendChild(createElement('p', 'empty-state', emptyText));
+            return;
+          }
+          tasks.forEach(function (task) { container.appendChild(renderTaskCard(task)); });
+        }
+
+        function renderTasks(tasks) {
+          taskData = Array.isArray(tasks) ? tasks : [];
+          var current = taskData.filter(function (task) { return task && ACTIVE_STATUSES[task.status]; });
+          var history = taskData.filter(function (task) { return !task || !ACTIVE_STATUSES[task.status]; });
+          activeCount.textContent = current.length ? '(' + current.length + ')' : '';
+          renderTaskList(activeTasks, current, '暂无进行中的任务。');
+          renderTaskList(historyTasks, history, '还没有历史任务。');
+        }
+
+        function hasActiveTasks() {
+          return taskData.some(function (task) { return task && ACTIVE_STATUSES[task.status]; });
+        }
+
+        function scheduleTaskPolling() {
+          if (pollTimer) { window.clearTimeout(pollTimer); }
+          var delay = document.visibilityState === 'visible' && hasActiveTasks() ? 1000 : 5000;
+          pollTimer = window.setTimeout(function () { pollTimer = 0; loadTasks(true); }, delay);
+        }
+
+        async function loadTasks(silent) {
+          if (taskRequestInFlight) { return; }
+          taskRequestInFlight = true;
+          refreshButton.disabled = true;
+          try {
+            var payload = await apiRequest('/api/tasks', { method: 'GET' });
+            renderTasks(payload && Array.isArray(payload.tasks) ? payload.tasks : []);
+            if (!silent) { setMessage(taskMessage, '任务列表已更新。', 'success'); }
+          } catch (error) {
+            if (!taskData.length) { renderTasks([]); }
+            setMessage(taskMessage, friendlyError(error), 'error');
+          } finally {
+            taskRequestInFlight = false;
+            refreshButton.disabled = false;
+            scheduleTaskPolling();
+          }
+        }
+
+        async function loadHealth() {
+          if (healthRequestInFlight) { return; }
+          healthRequestInFlight = true;
+          try {
+            var payload = await apiRequest('/api/health', { method: 'GET' });
+            if (payload && payload.status === 'ok' && payload.available !== false) {
+              var version = payload.version ? ' · ' + String(payload.version) : '';
+              setHealth(true, '本地服务正常' + version);
+            } else {
+              setHealth(false, '本地服务不可用');
+            }
+          } catch (error) {
+            setHealth(false, friendlyError(error));
+          } finally {
+            healthRequestInFlight = false;
+          }
+        }
+
+        async function inspectMedia() {
+          if (formRequestInFlight || !validateURL()) { return; }
+          setMessage(formMessage, '正在检查媒体…');
+          setFormBusy(true);
+          try {
+            var info = await apiRequest('/api/inspect', jsonOptions('POST', readTransientRequest()));
+            renderInspect(info || {});
+            setMessage(formMessage, '检查完成。', 'success');
+          } catch (error) {
+            setMessage(formMessage, friendlyError(error), 'error');
+          } finally {
+            setFormBusy(false);
+          }
+        }
+
+        async function createTask(event) {
+          event.preventDefault();
+          if (formRequestInFlight || !validateURL()) { return; }
+          setMessage(formMessage, '正在创建任务…');
+          setFormBusy(true);
+          try {
+            var task = await apiRequest('/api/tasks', jsonOptions('POST', readTaskRequest()));
+            clearSensitiveInputs();
+            var taskID = task && task.id ? String(task.id) : '';
+            setMessage(formMessage, taskID ? '任务已创建（' + taskID + '）。敏感请求信息已清空。' : '任务已创建，敏感请求信息已清空。', 'success');
+            await loadTasks(true);
+          } catch (error) {
+            setMessage(formMessage, friendlyError(error), 'error');
+          } finally {
+            setFormBusy(false);
+          }
+        }
+
+        async function cancelTask(id, button) {
+          if (!id || (button && button.disabled)) { return; }
+          if (button) { button.disabled = true; button.textContent = '取消中…'; }
+          try {
+            await apiRequest('/api/tasks/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
+            setMessage(taskMessage, '取消请求已提交。', 'success');
+            await loadTasks(true);
+          } catch (error) {
+            setMessage(taskMessage, friendlyError(error), 'error');
+            if (button) { button.disabled = false; button.textContent = '取消任务'; }
+          }
+        }
+
+        inspectButton.addEventListener('click', inspectMedia);
+        taskForm.addEventListener('submit', createTask);
+        refreshButton.addEventListener('click', function () { loadTasks(false); });
+        document.addEventListener('visibilitychange', function () {
+          scheduleTaskPolling();
+          if (document.visibilityState === 'visible') { loadTasks(true); }
+        });
+
+        receiveExtensionHandoff();
+        loadHealth();
+        window.setInterval(loadHealth, 30000);
+        loadTasks(false);
+      }());
+    </script>
+  </body>
+</html>

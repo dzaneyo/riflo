@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>riflo HLS 候选</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="header">
+        <div>
+          <h1>riflo</h1>
+          <p>当前标签页的 HLS 播放列表</p>
+        </div>
+        <span id="count" class="count" aria-live="polite">0</span>
+      </header>
+
+      <p class="notice">请先运行 <code>riflo serve</code>。本阶段只读取播放列表地址，不读取 Cookie。</p>
+
+      <section aria-labelledby="tabHeading">
+        <div class="section-heading">
+          <h2 id="tabHeading">候选地址</h2>
+          <button id="clearButton" class="button secondary" type="button">清空</button>
+        </div>
+        <p id="tabLabel" class="tab-label">正在读取当前标签页…</p>
+        <div id="empty" class="empty" hidden>
+          尚未发现 HLS 播放列表。打开视频并播放一会儿后再试。
+        </div>
+        <div id="candidateList" class="candidate-list"></div>
+      </section>
+
+      <footer>
+        <a href="http://127.0.0.1:8787/" target="_blank" rel="noreferrer">打开 riflo Web UI</a>
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

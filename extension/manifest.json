@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "riflo HLS 候选",
+  "version": "0.1.0",
+  "description": "发现当前标签页中的 HLS 播放列表，并交给本机 riflo 下载。",
+  "minimum_chrome_version": "121",
+  "browser_specific_settings": {
+    "gecko": {
+      "strict_min_version": "121"
+    }
+  },
+  "permissions": [
+    "webRequest",
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "riflo HLS 候选",
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,59 @@
+[tools]
+go = "1.27"
+node = "24"
+
+[env]
+RIFLO_ENV = "dev"
+
+[tasks.check]
+description = "Check the local development environment"
+run = '''
+go version
+node --version
+ffprobe -version | head -n 1
+ffmpeg -version | head -n 1
+'''
+
+[tasks.bootstrap]
+description = "Download Go dependencies"
+run = "go mod download"
+
+[tasks.test-go]
+description = "Run Go tests"
+env = { GOCACHE = "/tmp/riflo-gocache" }
+run = "go test ./..."
+
+[tasks.test-extension]
+description = "Run Chrome and Firefox extension tests"
+run = "node --test extension/test/*.test.js"
+
+[tasks.check-extension]
+description = "Check Chrome and Firefox extension JavaScript syntax"
+run = '''
+for file in extension/*.js; do
+  node --check "$file"
+done
+'''
+
+[tasks.test]
+description = "Run Go and Chrome/Firefox extension checks"
+depends = ["test-go", "check-extension", "test-extension"]
+
+[tasks.build]
+description = "Build the riflo binary"
+run = '''
+mkdir -p dist
+go build -o dist/riflo ./cmd/riflo
+'''
+
+[tasks.serve]
+description = "Start the local riflo Web UI and API"
+run = "go run ./cmd/riflo serve"
+
+[tasks.fmt]
+description = "Format Go source code"
+run = "go fmt ./..."
+
+[tasks.lint]
+description = "Run Go vet"
+run = "go vet ./..."

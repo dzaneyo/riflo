@@ -1,0 +1,10 @@
+.DS_Store
+.codex/
+AGENTS.md
+dist/
+*.db
+*.db-shm
+*.db-wal
+
+# Personal project notes.
+docs/riflo-design.md
