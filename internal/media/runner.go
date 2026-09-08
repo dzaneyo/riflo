@@ -21,9 +21,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dzaneyo/riflo/internal/app"
+	"github.com/dzaneyo/riflo/internal/ffmpegcap"
 )
 
 const (
@@ -83,6 +85,10 @@ var (
 type Config struct {
 	FFprobePath string
 	FFmpegPath  string
+
+	capOnce sync.Once
+	caps    ffmpegcap.Capabilities
+	capErr  error
 }
 
 // RunnerConfig is kept as a descriptive alias for callers that prefer the
@@ -273,7 +279,8 @@ func (r *Runner) Download(ctx context.Context, taskID string, req app.CreateTask
 		}
 	}()
 
-	args, err := ffmpegArgs(request, spec, tempPath, format, isHLSInput)
+	caps := r.capabilities(ctx)
+	args, err := ffmpegArgs(request, spec, tempPath, format, isHLSInput, caps)
 	if err != nil {
 		return Result{}, err
 	}
@@ -754,23 +761,21 @@ func (r *Runner) inspect(ctx context.Context, request mediaRequest) (app.MediaIn
 	return info, nil
 }
 
-func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string, hlsInput bool) ([]string, error) {
+func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string, hlsInput bool, caps ffmpegcap.Capabilities) ([]string, error) {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"}
 	if parsed, err := url.Parse(request.URL); err == nil && parsed != nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
-		// These are protocol-level retries supported by the local FFmpeg build.
-		// The explicit retry count and total delay cap keep a broken source from
-		// holding a task forever. 401/403 are intentionally absent.
-		args = append(args,
-			"-reconnect", "1",
-			"-reconnect_streamed", "1",
-			"-reconnect_on_network_error", "1",
-			"-reconnect_on_http_error", "429,500,502,503,504",
-			"-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMax),
-			"-reconnect_max_retries", strconv.Itoa(ffmpegReconnectRetries),
-			"-reconnect_delay_total_max", strconv.Itoa(ffmpegReconnectTotalMax),
-			"-respect_retry_after", "1",
-		)
-		if hlsInput {
+		// Add only options the concrete FFmpeg build reports as supported.
+		// This keeps older or distro-patched builds usable instead of failing
+		// downloads with an "Option not found" error.
+		if caps.Reconnect { args = append(args, "-reconnect", "1") }
+		if caps.ReconnectStreamed { args = append(args, "-reconnect_streamed", "1") }
+		if caps.ReconnectOnNetworkError { args = append(args, "-reconnect_on_network_error", "1") }
+		if caps.ReconnectOnHTTPError { args = append(args, "-reconnect_on_http_error", "429,500,502,503,504") }
+		if caps.ReconnectDelayMax { args = append(args, "-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMax)) }
+		if caps.ReconnectMaxRetries { args = append(args, "-reconnect_max_retries", strconv.Itoa(ffmpegReconnectRetries)) }
+		if caps.ReconnectDelayTotalMax { args = append(args, "-reconnect_delay_total_max", strconv.Itoa(ffmpegReconnectTotalMax)) }
+		if caps.RespectRetryAfter { args = append(args, "-respect_retry_after", "1") }
+		if hlsInput && caps.HLSSegmentMaxRetry {
 			args = append(args, "-seg_max_retry", strconv.Itoa(ffmpegReconnectRetries))
 		}
 	}
@@ -1271,4 +1276,18 @@ func sanitizeStderr(stderr string, request mediaRequest) string {
 		stderr = stderr[:maxErrorBytes] + "..."
 	}
 	return strings.TrimSpace(stderr)
+}
+
+
+func (r *Runner) capabilities(ctx context.Context) ffmpegcap.Capabilities {
+	if r == nil {
+		return ffmpegcap.Capabilities{}
+	}
+	r.capOnce.Do(func() {
+		r.caps, r.capErr = ffmpegcap.Detect(ctx, r.toolPath("ffmpeg"))
+	})
+	if r.capErr != nil {
+		return ffmpegcap.Capabilities{}
+	}
+	return r.caps
 }
