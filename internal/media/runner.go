@@ -1152,7 +1152,6 @@ func sanitizeStderr(stderr string, request mediaRequest) string {
 	return strings.TrimSpace(stderr)
 }
 
-
 func (r *Runner) capabilities(ctx context.Context) ffmpegcap.Capabilities {
 	if r == nil {
 		return ffmpegcap.Capabilities{}
