@@ -321,6 +321,7 @@ type mediaRequest struct {
 	UserAgent string
 	Cookie    string
 	HeaderArg []string
+	CookieArg []string
 	Secrets   []string
 }
 
@@ -357,6 +358,10 @@ func normalizeRequestWithOrigin(rawURL, referer, origin, userAgent, cookie strin
 	if err != nil {
 		return mediaRequest{}, err
 	}
+	cookieArg, err := makeScopedCookieArg(parsed, cookie)
+	if err != nil {
+		return mediaRequest{}, err
+	}
 	secrets := make([]string, 0, 4)
 	for _, value := range []string{referer, origin, userAgent, cookie} {
 		if value != "" {
@@ -365,7 +370,7 @@ func normalizeRequestWithOrigin(rawURL, referer, origin, userAgent, cookie strin
 	}
 	return mediaRequest{
 		URL: rawURL, Display: displayURL(parsed), Referer: referer, Origin: origin, UserAgent: userAgent,
-		Cookie: cookie, HeaderArg: headerArg, Secrets: secrets,
+		Cookie: cookie, HeaderArg: headerArg, CookieArg: cookieArg, Secrets: secrets,
 	}, nil
 }
 
@@ -443,7 +448,6 @@ func makeHeaderArgWithOrigin(referer, origin, userAgent, cookie string) ([]strin
 		{name: "Referer", value: referer},
 		{name: "Origin", value: origin},
 		{name: "User-Agent", value: userAgent},
-		{name: "Cookie", value: cookie},
 	} {
 		if header.value != "" {
 			headers = append(headers, header.name+": "+header.value)
@@ -455,6 +459,35 @@ func makeHeaderArgWithOrigin(referer, origin, userAgent, cookie string) ([]strin
 	// FFmpeg's HTTP protocol expects a CRLF-delimited header block. Values have
 	// already been checked for CR/LF, so a caller cannot inject another header.
 	return []string{"-headers", strings.Join(headers, "\r\n") + "\r\n"}, nil
+}
+
+
+func makeScopedCookieArg(source *url.URL, cookie string) ([]string, error) {
+	cookie = strings.TrimSpace(cookie)
+	if cookie == "" {
+		return nil, nil
+	}
+	if source == nil || source.Hostname() == "" {
+		return nil, ErrInvalidURL
+	}
+	lines := make([]string, 0, 4)
+	for _, part := range strings.Split(cookie, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(part, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" || strings.ContainsAny(name, " \t\r\n") {
+			return nil, errors.New("Cookie header contains an invalid cookie")
+		}
+		value = strings.TrimSpace(value)
+		lines = append(lines, name+"="+value+"; path=/; domain="+source.Hostname()+";")
+	}
+	if len(lines) == 0 {
+		return nil, errors.New("Cookie header contains no cookies")
+	}
+	return []string{"-cookies", strings.Join(lines, "\n")}, nil
 }
 
 func isLikelyHLSURL(raw string) bool {
@@ -723,6 +756,7 @@ type probeFormat struct {
 func (r *Runner) inspect(ctx context.Context, request mediaRequest) (app.MediaInfo, error) {
 	args := []string{"-v", "error", "-print_format", "json", "-show_format", "-show_streams"}
 	args = append(args, request.HeaderArg...)
+	args = append(args, request.CookieArg...)
 	args = append(args, request.URL)
 
 	stdout, stderr, err := r.runJSONCommand(ctx, r.toolPath("ffprobe"), args)
@@ -780,6 +814,7 @@ func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string, 
 		}
 	}
 	args = append(args, request.HeaderArg...)
+	args = append(args, request.CookieArg...)
 	args = append(args,
 		"-i", request.URL,
 		// Let FFmpeg's default stream selection choose the highest-resolution
