@@ -1244,7 +1244,7 @@
           taskRequestInFlight = true;
           refreshButton.disabled = true;
           try {
-            var payload = await apiRequest('/api/tasks', { method: 'GET' });
+            var payload = await apiRequest('/api/tasks?limit=200', { method: 'GET' });
             renderTasks(payload && Array.isArray(payload.tasks) ? payload.tasks : []);
             if (!silent) { setMessage(taskMessage, '任务列表已更新。', 'success'); }
           } catch (error) {
