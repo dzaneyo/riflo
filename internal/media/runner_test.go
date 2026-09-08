@@ -144,6 +144,31 @@ func TestDownloadFailureDoesNotLeakCookieAndCleansTemp(t *testing.T) {
 	}
 }
 
+func TestChildRefererStripsSensitiveQueryAndFragment(t *testing.T) {
+	request, err := normalizeRequestWithOrigin(
+		"https://media.example.test/master.m3u8",
+		"https://watch.example.test/video?id=private#player",
+		"",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("normalizeRequestWithOrigin() error = %v", err)
+	}
+	headers := strings.Join(request.HeaderArg, "\n")
+	if !strings.Contains(headers, "Referer: https://watch.example.test/video") {
+		t.Fatalf("child Referer missing sanitized path: %q", headers)
+	}
+	for _, secret := range []string{"id=private", "#player"} {
+		if strings.Contains(headers, secret) {
+			t.Fatalf("child Referer leaked %q: %q", secret, headers)
+		}
+	}
+	if request.Referer != "https://watch.example.test/video?id=private#player" {
+		t.Fatalf("preflight Referer changed: %q", request.Referer)
+	}
+}
+
 func TestScopedCookieArgUsesSourceDomainAndIsNotAHeader(t *testing.T) {
 	request, err := normalizeRequestWithOrigin(
 		"https://media.example.test/path/master.m3u8?token=private",
