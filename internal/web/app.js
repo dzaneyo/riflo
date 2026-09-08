@@ -976,13 +976,36 @@
     pollTimer = window.setTimeout(function () { pollTimer = 0; loadTasks(true); }, delay);
   }
 
+  function mergeTaskLists() {
+    var merged = new Map();
+    Array.prototype.slice.call(arguments).forEach(function (tasks) {
+      if (!Array.isArray(tasks)) { return; }
+      tasks.forEach(function (task) {
+        if (!task || !task.id) { return; }
+        merged.set(String(task.id), task);
+      });
+    });
+    return Array.from(merged.values()).sort(function (left, right) {
+      return new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime();
+    });
+  }
+
   async function loadTasks(silent) {
     if (taskRequestInFlight) { return; }
     taskRequestInFlight = true;
     refreshButton.disabled = true;
     try {
-      var payload = await apiRequest('/api/tasks?limit=200', { method: 'GET' });
-      renderTasks(payload && Array.isArray(payload.tasks) ? payload.tasks : []);
+      var payloads = await Promise.all([
+        apiRequest('/api/tasks?status=queued', { method: 'GET' }),
+        apiRequest('/api/tasks?status=running', { method: 'GET' }),
+        apiRequest('/api/tasks?limit=200', { method: 'GET' })
+      ]);
+      var tasks = mergeTaskLists(
+        payloads[0] && payloads[0].tasks,
+        payloads[1] && payloads[1].tasks,
+        payloads[2] && payloads[2].tasks
+      );
+      renderTasks(tasks);
       if (!silent) { setMessage(taskMessage, '任务列表已更新。', 'success'); }
     } catch (error) {
       if (!taskData.length) { renderTasks([]); }
