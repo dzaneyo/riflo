@@ -24,8 +24,8 @@ import (
 var ErrNotFound = errors.New("task not found")
 
 const (
-	openTimeout = 10 * time.Second
-	busyTimeout = 5000
+	openTimeout   = 10 * time.Second
+	busyTimeout   = 5000
 	schemaVersion = 1
 )
 
@@ -458,7 +458,6 @@ func isMemoryPath(path string) bool {
 func isURIPath(path string) bool {
 	return strings.HasPrefix(path, "file:")
 }
-
 
 func migrate(ctx context.Context, db *sql.DB) error {
 	var version int
