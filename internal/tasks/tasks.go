@@ -34,6 +34,8 @@ const (
 	maxErrorMessage               = 512
 	maxHeaderValue                = 64 * 1024
 	maxTaskIDRandomBytes          = 6
+	terminalPersistAttempts       = 3
+	terminalPersistRetryDelay     = 100 * time.Millisecond
 )
 
 var (
@@ -394,7 +396,7 @@ func (s *Service) execute(item *queuedTask, runCtx context.Context, runCancel co
 	finish := time.Now().UTC()
 	progress.task.FinishedAt = &finish
 	progress.task.UpdatedAt = finish
-	s.persistProgress(&progress, true)
+	s.persistTerminal(&progress)
 
 	s.mu.Lock()
 	delete(s.active, task.ID)
@@ -457,6 +459,23 @@ func (s *Service) persistProgress(p *taskProgress, force bool) {
 	p.lastFraction = p.task.Progress
 	p.lastBytes = p.task.BytesDone
 	p.persisted = true
+}
+
+func (s *Service) persistTerminal(p *taskProgress) {
+	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
+		p.task.UpdatedAt = time.Now().UTC()
+		if err := s.store.Update(context.Background(), p.task); err == nil {
+			p.lastPersisted = p.task.UpdatedAt
+			p.lastFraction = p.task.Progress
+			p.lastBytes = p.task.BytesDone
+			p.persisted = true
+			return
+		}
+		if attempt == terminalPersistAttempts-1 {
+			return
+		}
+		time.Sleep(terminalPersistRetryDelay * time.Duration(attempt+1))
+	}
 }
 
 // ListTasks reads durable history. No in-memory request information is
