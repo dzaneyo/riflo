@@ -16,6 +16,10 @@ It provides:
 - Go 1.27+
 - FFmpeg and FFprobe
 
+riflo detects optional FFmpeg HTTP/HLS capabilities at runtime instead of requiring
+one exact FFmpeg version. Run `riflo doctor` to see which retry features are
+available; unsupported optional options are disabled automatically.
+
 ## Build and run
 
 ```bash
@@ -47,3 +51,15 @@ Start `riflo serve`, then load the `extension` directory as an unpacked extensio
 Play a video, open the extension, and send a detected HLS candidate to riflo. It can replay Referer, Origin, and User-Agent, but it does not read cookies or start downloads automatically.
 
 riflo does not bypass DRM, authentication, paywalls, or other access controls. Only download media you are authorized to access.
+
+## Development checks
+
+The repository includes GitHub Actions CI for Go formatting, `go vet`, race-enabled
+Go tests, extension syntax/tests, and a production build. The same checks can be run
+locally with:
+
+```bash
+mise run test
+mise run lint
+mise run build
+```
