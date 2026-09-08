@@ -34,9 +34,10 @@ const (
 	maxErrorMessage               = 512
 	maxHeaderValue                = 64 * 1024
 	maxTaskIDRandomBytes          = 6
-	terminalPersistAttempts       = 3
-	terminalPersistRetryDelay     = 100 * time.Millisecond
 )
+
+const terminalPersistAttempts = 3
+const terminalPersistRetryDelay = 100 * time.Millisecond
 
 var (
 	// The URL matcher is used only as a final defence when a child process or a
