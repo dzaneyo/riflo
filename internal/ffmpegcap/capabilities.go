@@ -55,20 +55,17 @@ func Detect(ctx context.Context, ffmpegPath string) (Capabilities, error) {
 		return Capabilities{}, fmt.Errorf("inspect FFmpeg HLS capabilities: %w", err)
 	}
 
-	has := func(text, option string) bool {
-		return strings.Contains(text, option)
-	}
 	return Capabilities{
-		Reconnect:               has(httpHelp, "reconnect"),
-		ReconnectStreamed:       has(httpHelp, "reconnect_streamed"),
-		ReconnectOnNetworkError: has(httpHelp, "reconnect_on_network_error"),
-		ReconnectOnHTTPError:    has(httpHelp, "reconnect_on_http_error"),
-		ReconnectDelayMax:       has(httpHelp, "reconnect_delay_max"),
-		ReconnectMaxRetries:     has(httpHelp, "reconnect_max_retries"),
-		ReconnectDelayTotalMax:  has(httpHelp, "reconnect_delay_total_max"),
-		RespectRetryAfter:       has(httpHelp, "respect_retry_after"),
-		HLSSegmentMaxRetry:      has(hlsHelp, "seg_max_retry"),
-		Cookies:                 has(httpHelp, "cookies"),
+		Reconnect:               hasOption(httpHelp, "reconnect"),
+		ReconnectStreamed:       hasOption(httpHelp, "reconnect_streamed"),
+		ReconnectOnNetworkError: hasOption(httpHelp, "reconnect_on_network_error"),
+		ReconnectOnHTTPError:    hasOption(httpHelp, "reconnect_on_http_error"),
+		ReconnectDelayMax:       hasOption(httpHelp, "reconnect_delay_max"),
+		ReconnectMaxRetries:     hasOption(httpHelp, "reconnect_max_retries"),
+		ReconnectDelayTotalMax:  hasOption(httpHelp, "reconnect_delay_total_max"),
+		RespectRetryAfter:       hasOption(httpHelp, "respect_retry_after"),
+		HLSSegmentMaxRetry:      hasOption(hlsHelp, "seg_max_retry"),
+		Cookies:                 hasOption(httpHelp, "cookies"),
 	}, nil
 }
 
@@ -82,4 +79,18 @@ func help(ctx context.Context, path, topic string) (string, error) {
 		return "", fmt.Errorf("%s -h %s: %w", path, topic, err)
 	}
 	return string(output), nil
+}
+
+
+func hasOption(helpText, option string) bool {
+	for _, line := range strings.Split(helpText, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if strings.TrimLeft(fields[0], "-") == option {
+			return true
+		}
+	}
+	return false
 }
