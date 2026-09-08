@@ -81,7 +81,6 @@ func help(ctx context.Context, path, topic string) (string, error) {
 	return string(output), nil
 }
 
-
 func hasOption(helpText, option string) bool {
 	for _, line := range strings.Split(helpText, "\n") {
 		fields := strings.Fields(line)
