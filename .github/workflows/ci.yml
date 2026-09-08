@@ -35,6 +35,8 @@ jobs:
           files="$(gofmt -l .)"
           if [ -n "$files" ]; then
             printf 'gofmt required for:\n%s\n' "$files"
+            gofmt -w $files
+            git diff -- $files
             exit 1
           fi
 
