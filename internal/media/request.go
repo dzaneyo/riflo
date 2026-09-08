@@ -182,4 +182,3 @@ func makeScopedCookieArg(source *url.URL, cookie string) ([]string, error) {
 	}
 	return []string{"-cookies", strings.Join(lines, "\n")}, nil
 }
-
