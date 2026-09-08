@@ -48,7 +48,8 @@ func normalizeRequestWithOrigin(rawURL, referer, origin, userAgent, cookie strin
 			return mediaRequest{}, err
 		}
 	}
-	headerArg, err := makeHeaderArgWithOrigin(referer, origin, userAgent, cookie)
+	childReferer := sanitizeChildReferer(referer)
+	headerArg, err := makeHeaderArgWithOrigin(childReferer, origin, userAgent, cookie)
 	if err != nil {
 		return mediaRequest{}, err
 	}
@@ -104,6 +105,23 @@ func displayURL(parsed *url.URL) string {
 	clone.ForceQuery = false
 	clone.Fragment = ""
 	return clone.String()
+}
+
+func sanitizeChildReferer(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed == nil || parsed.Host == "" ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func validateHeaderValue(name, value string) error {
