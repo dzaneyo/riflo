@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-//go:embed index.html
+//go:embed index.html app.css app.js
 var files embed.FS
 
 // Handler returns a handler backed entirely by the embedded files.
