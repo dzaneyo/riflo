@@ -84,13 +84,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.api.ServeHTTP(w, r)
 		return
 	}
-	if r.URL.Path != "/" && !strings.HasPrefix(r.URL.Path, "/index.html") {
-		// The embedded UI currently has one document. Keep unknown non-API paths
-		// a regular 404 instead of exposing a directory listing.
+	switch r.URL.Path {
+	case "/", "/index.html", "/app.css", "/app.js":
+		s.web.ServeHTTP(w, r)
+	default:
+		// Serve only the explicitly embedded UI assets. Unknown non-API paths
+		// remain a regular 404 instead of exposing a directory listing.
 		writeError(w, app.NewError("not_found", "page not found", http.StatusNotFound))
-		return
 	}
-	s.web.ServeHTTP(w, r)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
