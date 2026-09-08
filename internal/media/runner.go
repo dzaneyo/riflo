@@ -85,10 +85,6 @@ var (
 type Config struct {
 	FFprobePath string
 	FFmpegPath  string
-
-	capOnce sync.Once
-	caps    ffmpegcap.Capabilities
-	capErr  error
 }
 
 // RunnerConfig is kept as a descriptive alias for callers that prefer the
@@ -102,6 +98,10 @@ type Runner struct {
 	// mean the corresponding executable name on PATH.
 	FFprobePath string
 	FFmpegPath  string
+
+	capOnce sync.Once
+	caps    ffmpegcap.Capabilities
+	capErr  error
 }
 
 // NewRunner creates a media runner. Empty executable paths use the names
