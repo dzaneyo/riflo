@@ -624,14 +624,30 @@ func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string, 
 		// Add only options the concrete FFmpeg build reports as supported.
 		// This keeps older or distro-patched builds usable instead of failing
 		// downloads with an "Option not found" error.
-		if caps.Reconnect { args = append(args, "-reconnect", "1") }
-		if caps.ReconnectStreamed { args = append(args, "-reconnect_streamed", "1") }
-		if caps.ReconnectOnNetworkError { args = append(args, "-reconnect_on_network_error", "1") }
-		if caps.ReconnectOnHTTPError { args = append(args, "-reconnect_on_http_error", "429,500,502,503,504") }
-		if caps.ReconnectDelayMax { args = append(args, "-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMax)) }
-		if caps.ReconnectMaxRetries { args = append(args, "-reconnect_max_retries", strconv.Itoa(ffmpegReconnectRetries)) }
-		if caps.ReconnectDelayTotalMax { args = append(args, "-reconnect_delay_total_max", strconv.Itoa(ffmpegReconnectTotalMax)) }
-		if caps.RespectRetryAfter { args = append(args, "-respect_retry_after", "1") }
+		if caps.Reconnect {
+			args = append(args, "-reconnect", "1")
+		}
+		if caps.ReconnectStreamed {
+			args = append(args, "-reconnect_streamed", "1")
+		}
+		if caps.ReconnectOnNetworkError {
+			args = append(args, "-reconnect_on_network_error", "1")
+		}
+		if caps.ReconnectOnHTTPError {
+			args = append(args, "-reconnect_on_http_error", "429,500,502,503,504")
+		}
+		if caps.ReconnectDelayMax {
+			args = append(args, "-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMax))
+		}
+		if caps.ReconnectMaxRetries {
+			args = append(args, "-reconnect_max_retries", strconv.Itoa(ffmpegReconnectRetries))
+		}
+		if caps.ReconnectDelayTotalMax {
+			args = append(args, "-reconnect_delay_total_max", strconv.Itoa(ffmpegReconnectTotalMax))
+		}
+		if caps.RespectRetryAfter {
+			args = append(args, "-respect_retry_after", "1")
+		}
 		if hlsInput && caps.HLSSegmentMaxRetry {
 			args = append(args, "-seg_max_retry", strconv.Itoa(ffmpegReconnectRetries))
 		}
