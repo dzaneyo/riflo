@@ -155,7 +155,6 @@ func makeHeaderArgWithOrigin(referer, origin, userAgent, cookie string) ([]strin
 	return []string{"-headers", strings.Join(headers, "\r\n") + "\r\n"}, nil
 }
 
-
 func makeScopedCookieArg(source *url.URL, cookie string) ([]string, error) {
 	cookie = strings.TrimSpace(cookie)
 	if cookie == "" {
