@@ -24,8 +24,9 @@ import (
 var ErrNotFound = errors.New("task not found")
 
 const (
-	openTimeout = 10 * time.Second
-	busyTimeout = 5000
+	openTimeout   = 10 * time.Second
+	busyTimeout   = 5000
+	schemaVersion = 1
 )
 
 const schema = `
@@ -123,7 +124,7 @@ func Open(path string) (*Store, error) {
 			return closeDB(fmt.Errorf("configure sqlite (%s): %w", pragma, err))
 		}
 	}
-	if _, err := db.ExecContext(ctx, schema); err != nil {
+	if err := migrate(ctx, db); err != nil {
 		return closeDB(fmt.Errorf("initialize sqlite schema: %w", err))
 	}
 
@@ -456,4 +457,36 @@ func isMemoryPath(path string) bool {
 
 func isURIPath(path string) bool {
 	return strings.HasPrefix(path, "file:")
+}
+
+func migrate(ctx context.Context, db *sql.DB) error {
+	var version int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if version > schemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, schemaVersion)
+	}
+	if version == 0 {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, schema); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		version = 1
+	}
+	if version != schemaVersion {
+		return fmt.Errorf("unsupported schema version %d", version)
+	}
+	return nil
 }

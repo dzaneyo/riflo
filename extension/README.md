@@ -1,6 +1,6 @@
 # riflo 浏览器扩展（Phase 3）
 
-这是一个无构建依赖的 Manifest V3 浏览器扩展，使用同一套 manifest 和源码支持 Chrome 与 Firefox。它只负责观察当前浏览器标签页的网络响应，识别 HLS 播放列表（`.m3u8` 或 HLS Content-Type），再由用户明确点击按钮把候选地址交给本机 riflo Web UI。
+这是一个无构建依赖的 Manifest V3 浏览器扩展，使用同一套 manifest 和源码支持 Chrome 与 Firefox。它只负责观察浏览器网络事件，并且只把“当前活动标签页”的 HLS 候选保留到会话存储中。候选通过 `.m3u8` 或 HLS Content-Type 识别，再由用户明确点击按钮交给本机 riflo Web UI。
 
 当前最低版本为 Chrome 121 和 Firefox 121。manifest 同时声明 `background.service_worker` 与 `background.scripts`：Chrome 使用 service worker，Firefox 使用后台脚本；扩展源码通过 `globalThis.browser ?? globalThis.chrome` 使用两端 API。
 
@@ -49,6 +49,7 @@ http://127.0.0.1:8787/#source=<编码后的完整播放列表地址>&referer=<�
 
 ## 数据与限制
 
+- 只有事件所属标签页当前处于活动状态时，候选才会进入 `storage.session`；后台标签页不会持续积累候选。
 - 每个标签页最多保留 20 个候选，候选 30 分钟后过期；同一完整 URL 会更新最近发现时间而不会重复显示。
 - 弹窗会显示发现来源（URL 后缀、Content-Type），同一 URL 的多次发现会合并来源；也可以单独删除某一条候选或清空当前标签页。
 - 弹窗展示播放列表 URL 和请求来源都会移除 query、fragment 和 URL 用户信息；「在 riflo 打开」仅在用户点击后使用 storage.session 中保存的完整播放列表 URL 和安全请求上下文。

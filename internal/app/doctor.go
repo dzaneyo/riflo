@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/dzaneyo/riflo/internal/config"
+	"github.com/dzaneyo/riflo/internal/ffmpegcap"
 )
 
 type DoctorCheck struct {
@@ -64,8 +65,26 @@ func RunDoctor(ctx context.Context, cfg config.Config) DoctorReport {
 			continue
 		}
 		add(name, nil, path)
+		if name == "ffmpeg" {
+			caps, capErr := ffmpegcap.Detect(ctx, path)
+			if capErr != nil {
+				add("ffmpeg capabilities", capErr, "")
+				continue
+			}
+			add("ffmpeg HTTP retry", nil, capabilityDetail(caps.ReliableHTTP()))
+			add("ffmpeg bounded retry", nil, capabilityDetail(caps.ReconnectMaxRetries && caps.ReconnectDelayTotalMax))
+			add("ffmpeg Retry-After", nil, capabilityDetail(caps.RespectRetryAfter))
+			add("ffmpeg HLS segment retry", nil, capabilityDetail(caps.HLSSegmentMaxRetry))
+		}
 	}
 	return report
+}
+
+func capabilityDetail(supported bool) string {
+	if supported {
+		return "supported"
+	}
+	return "not supported; riflo will disable this optional optimization"
 }
 
 func checkWritable(path string) error {

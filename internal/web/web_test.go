@@ -6,13 +6,21 @@ import (
 )
 
 func TestEmbeddedUIIncludesTransientDownloadControls(t *testing.T) {
-	content, err := files.ReadFile("index.html")
+	htmlBytes, err := files.ReadFile("index.html")
 	if err != nil {
 		t.Fatalf("read embedded index: %v", err)
 	}
-	html := string(content)
+	scriptBytes, err := files.ReadFile("app.js")
+	if err != nil {
+		t.Fatalf("read embedded app.js: %v", err)
+	}
+	html := string(htmlBytes)
+	script := string(scriptBytes)
+
+	if !strings.Contains(html, `id="origin"`) {
+		t.Error("embedded HTML is missing origin input")
+	}
 	for _, marker := range []string{
-		`id="origin"`,
 		`params.get('origin')`,
 		`params.get('user_agent')`,
 		`hls_variant_index`,
@@ -21,12 +29,12 @@ func TestEmbeddedUIIncludesTransientDownloadControls(t *testing.T) {
 		`function retryTask`,
 		`variant_unavailable`,
 	} {
-		if !strings.Contains(html, marker) {
-			t.Errorf("embedded UI is missing marker %q", marker)
+		if !strings.Contains(script, marker) {
+			t.Errorf("embedded app.js is missing marker %q", marker)
 		}
 	}
 	for _, forbidden := range []string{"localStorage", "sessionStorage"} {
-		if strings.Contains(html, forbidden) {
+		if strings.Contains(html, forbidden) || strings.Contains(script, forbidden) {
 			t.Errorf("embedded UI must not use browser storage API %q", forbidden)
 		}
 	}

@@ -21,9 +21,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dzaneyo/riflo/internal/app"
+	"github.com/dzaneyo/riflo/internal/ffmpegcap"
 )
 
 const (
@@ -96,6 +98,10 @@ type Runner struct {
 	// mean the corresponding executable name on PATH.
 	FFprobePath string
 	FFmpegPath  string
+
+	capOnce sync.Once
+	caps    ffmpegcap.Capabilities
+	capErr  error
 }
 
 // NewRunner creates a media runner. Empty executable paths use the names
@@ -273,7 +279,8 @@ func (r *Runner) Download(ctx context.Context, taskID string, req app.CreateTask
 		}
 	}()
 
-	args, err := ffmpegArgs(request, spec, tempPath, format, isHLSInput)
+	caps := r.capabilities(ctx)
+	args, err := ffmpegArgs(request, spec, tempPath, format, isHLSInput, caps)
 	if err != nil {
 		return Result{}, err
 	}
@@ -304,150 +311,6 @@ func (r *Runner) Download(ctx context.Context, taskID string, req app.CreateTask
 		resultDuration = durationMS
 	}
 	return Result{OutputPath: spec.path, DurationMS: resultDuration}, nil
-}
-
-type mediaRequest struct {
-	URL       string
-	Display   string
-	Referer   string
-	Origin    string
-	UserAgent string
-	Cookie    string
-	HeaderArg []string
-	Secrets   []string
-}
-
-// normalizeRequest preserves the package-local helper's original signature
-// for callers that do not need an Origin header.
-func normalizeRequest(rawURL, referer, userAgent, cookie string) (mediaRequest, error) {
-	return normalizeRequestWithOrigin(rawURL, referer, "", userAgent, cookie)
-}
-
-func normalizeRequestWithOrigin(rawURL, referer, origin, userAgent, cookie string) (mediaRequest, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	parsed, err := parseMediaURL(rawURL)
-	if err != nil {
-		return mediaRequest{}, err
-	}
-	origin, err = normalizeOriginHeader(origin)
-	if err != nil {
-		return mediaRequest{}, err
-	}
-	for _, header := range []struct {
-		name  string
-		value string
-	}{
-		{name: "Referer", value: referer},
-		{name: "Origin", value: origin},
-		{name: "User-Agent", value: userAgent},
-		{name: "Cookie", value: cookie},
-	} {
-		if err := validateHeaderValue(header.name, header.value); err != nil {
-			return mediaRequest{}, err
-		}
-	}
-	headerArg, err := makeHeaderArgWithOrigin(referer, origin, userAgent, cookie)
-	if err != nil {
-		return mediaRequest{}, err
-	}
-	secrets := make([]string, 0, 4)
-	for _, value := range []string{referer, origin, userAgent, cookie} {
-		if value != "" {
-			secrets = append(secrets, value)
-		}
-	}
-	return mediaRequest{
-		URL: rawURL, Display: displayURL(parsed), Referer: referer, Origin: origin, UserAgent: userAgent,
-		Cookie: cookie, HeaderArg: headerArg, Secrets: secrets,
-	}, nil
-}
-
-func normalizeOriginHeader(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" || value == "null" {
-		return value, nil
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed == nil || parsed.Host == "" || parsed.User != nil ||
-		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
-		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("Origin header must be an HTTP origin")
-	}
-	return parsed.Scheme + "://" + parsed.Host, nil
-}
-
-func parseMediaURL(raw string) (*url.URL, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, fmt.Errorf("%w: url is required", ErrInvalidURL)
-	}
-	if strings.ContainsAny(raw, "\r\n\x00") {
-		return nil, fmt.Errorf("%w: url contains invalid control characters", ErrInvalidURL)
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return nil, ErrInvalidURL
-	}
-	return parsed, nil
-}
-
-func displayURL(parsed *url.URL) string {
-	clone := *parsed
-	clone.User = nil
-	clone.RawQuery = ""
-	clone.ForceQuery = false
-	clone.Fragment = ""
-	return clone.String()
-}
-
-func validateHeaderValue(name, value string) error {
-	if len(value) > maxHeaderValue {
-		return fmt.Errorf("%s header is too long", name)
-	}
-	if strings.ContainsAny(value, "\r\n\x00") {
-		return fmt.Errorf("%s header contains invalid control characters", name)
-	}
-	return nil
-}
-
-func makeHeaderArg(referer, userAgent, cookie string) ([]string, error) {
-	return makeHeaderArgWithOrigin(referer, "", userAgent, cookie)
-}
-
-func makeHeaderArgWithOrigin(referer, origin, userAgent, cookie string) ([]string, error) {
-	for _, header := range []struct {
-		name  string
-		value string
-	}{
-		{name: "Referer", value: referer},
-		{name: "Origin", value: origin},
-		{name: "User-Agent", value: userAgent},
-		{name: "Cookie", value: cookie},
-	} {
-		if err := validateHeaderValue(header.name, header.value); err != nil {
-			return nil, err
-		}
-	}
-	headers := make([]string, 0, 4)
-	for _, header := range []struct {
-		name  string
-		value string
-	}{
-		{name: "Referer", value: referer},
-		{name: "Origin", value: origin},
-		{name: "User-Agent", value: userAgent},
-		{name: "Cookie", value: cookie},
-	} {
-		if header.value != "" {
-			headers = append(headers, header.name+": "+header.value)
-		}
-	}
-	if len(headers) == 0 {
-		return nil, nil
-	}
-	// FFmpeg's HTTP protocol expects a CRLF-delimited header block. Values have
-	// already been checked for CR/LF, so a caller cannot inject another header.
-	return []string{"-headers", strings.Join(headers, "\r\n") + "\r\n"}, nil
 }
 
 func isLikelyHLSURL(raw string) bool {
@@ -716,6 +579,7 @@ type probeFormat struct {
 func (r *Runner) inspect(ctx context.Context, request mediaRequest) (app.MediaInfo, error) {
 	args := []string{"-v", "error", "-print_format", "json", "-show_format", "-show_streams"}
 	args = append(args, request.HeaderArg...)
+	args = append(args, request.CookieArg...)
 	args = append(args, request.URL)
 
 	stdout, stderr, err := r.runJSONCommand(ctx, r.toolPath("ffprobe"), args)
@@ -754,27 +618,42 @@ func (r *Runner) inspect(ctx context.Context, request mediaRequest) (app.MediaIn
 	return info, nil
 }
 
-func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string, hlsInput bool) ([]string, error) {
+func ffmpegArgs(request mediaRequest, spec outputSpec, tempPath, format string, hlsInput bool, caps ffmpegcap.Capabilities) ([]string, error) {
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostats", "-progress", "pipe:1"}
 	if parsed, err := url.Parse(request.URL); err == nil && parsed != nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
-		// These are protocol-level retries supported by the local FFmpeg build.
-		// The explicit retry count and total delay cap keep a broken source from
-		// holding a task forever. 401/403 are intentionally absent.
-		args = append(args,
-			"-reconnect", "1",
-			"-reconnect_streamed", "1",
-			"-reconnect_on_network_error", "1",
-			"-reconnect_on_http_error", "429,500,502,503,504",
-			"-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMax),
-			"-reconnect_max_retries", strconv.Itoa(ffmpegReconnectRetries),
-			"-reconnect_delay_total_max", strconv.Itoa(ffmpegReconnectTotalMax),
-			"-respect_retry_after", "1",
-		)
-		if hlsInput {
+		// Add only options the concrete FFmpeg build reports as supported.
+		// This keeps older or distro-patched builds usable instead of failing
+		// downloads with an "Option not found" error.
+		if caps.Reconnect {
+			args = append(args, "-reconnect", "1")
+		}
+		if caps.ReconnectStreamed {
+			args = append(args, "-reconnect_streamed", "1")
+		}
+		if caps.ReconnectOnNetworkError {
+			args = append(args, "-reconnect_on_network_error", "1")
+		}
+		if caps.ReconnectOnHTTPError {
+			args = append(args, "-reconnect_on_http_error", "429,500,502,503,504")
+		}
+		if caps.ReconnectDelayMax {
+			args = append(args, "-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMax))
+		}
+		if caps.ReconnectMaxRetries {
+			args = append(args, "-reconnect_max_retries", strconv.Itoa(ffmpegReconnectRetries))
+		}
+		if caps.ReconnectDelayTotalMax {
+			args = append(args, "-reconnect_delay_total_max", strconv.Itoa(ffmpegReconnectTotalMax))
+		}
+		if caps.RespectRetryAfter {
+			args = append(args, "-respect_retry_after", "1")
+		}
+		if hlsInput && caps.HLSSegmentMaxRetry {
 			args = append(args, "-seg_max_retry", strconv.Itoa(ffmpegReconnectRetries))
 		}
 	}
 	args = append(args, request.HeaderArg...)
+	args = append(args, request.CookieArg...)
 	args = append(args,
 		"-i", request.URL,
 		// Let FFmpeg's default stream selection choose the highest-resolution
@@ -1271,4 +1150,17 @@ func sanitizeStderr(stderr string, request mediaRequest) string {
 		stderr = stderr[:maxErrorBytes] + "..."
 	}
 	return strings.TrimSpace(stderr)
+}
+
+func (r *Runner) capabilities(ctx context.Context) ffmpegcap.Capabilities {
+	if r == nil {
+		return ffmpegcap.Capabilities{}
+	}
+	r.capOnce.Do(func() {
+		r.caps, r.capErr = ffmpegcap.Detect(ctx, r.toolPath("ffmpeg"))
+	})
+	if r.capErr != nil {
+		return ffmpegcap.Capabilities{}
+	}
+	return r.caps
 }

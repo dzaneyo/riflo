@@ -36,6 +36,9 @@ const (
 	maxTaskIDRandomBytes          = 6
 )
 
+const terminalPersistAttempts = 3
+const terminalPersistRetryDelay = 100 * time.Millisecond
+
 var (
 	// The URL matcher is used only as a final defence when a child process or a
 	// test runner returns an arbitrary error string. The request-specific
@@ -394,7 +397,7 @@ func (s *Service) execute(item *queuedTask, runCtx context.Context, runCancel co
 	finish := time.Now().UTC()
 	progress.task.FinishedAt = &finish
 	progress.task.UpdatedAt = finish
-	s.persistProgress(&progress, true)
+	s.persistTerminal(&progress)
 
 	s.mu.Lock()
 	delete(s.active, task.ID)
@@ -457,6 +460,23 @@ func (s *Service) persistProgress(p *taskProgress, force bool) {
 	p.lastFraction = p.task.Progress
 	p.lastBytes = p.task.BytesDone
 	p.persisted = true
+}
+
+func (s *Service) persistTerminal(p *taskProgress) {
+	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
+		p.task.UpdatedAt = time.Now().UTC()
+		if err := s.store.Update(context.Background(), p.task); err == nil {
+			p.lastPersisted = p.task.UpdatedAt
+			p.lastFraction = p.task.Progress
+			p.lastBytes = p.task.BytesDone
+			p.persisted = true
+			return
+		}
+		if attempt == terminalPersistAttempts-1 {
+			return
+		}
+		time.Sleep(terminalPersistRetryDelay * time.Duration(attempt+1))
+	}
 }
 
 // ListTasks reads durable history. No in-memory request information is

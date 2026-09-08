@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/dzaneyo/riflo/internal/app"
+	"github.com/dzaneyo/riflo/internal/ffmpegcap"
 )
 
 func TestInspectMapsProbeJSONAndRedactsSource(t *testing.T) {
@@ -139,6 +140,57 @@ func TestDownloadFailureDoesNotLeakCookieAndCleansTemp(t *testing.T) {
 	for _, entry := range mustReadDir(t, dir) {
 		if strings.HasPrefix(entry.Name(), ".riflo-") {
 			t.Fatalf("temporary file left after failure: %s", entry.Name())
+		}
+	}
+}
+
+func TestChildRefererStripsSensitiveQueryAndFragment(t *testing.T) {
+	request, err := normalizeRequestWithOrigin(
+		"https://media.example.test/master.m3u8",
+		"https://watch.example.test/video?id=private#player",
+		"",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("normalizeRequestWithOrigin() error = %v", err)
+	}
+	headers := strings.Join(request.HeaderArg, "\n")
+	if !strings.Contains(headers, "Referer: https://watch.example.test/video") {
+		t.Fatalf("child Referer missing sanitized path: %q", headers)
+	}
+	for _, secret := range []string{"id=private", "#player"} {
+		if strings.Contains(headers, secret) {
+			t.Fatalf("child Referer leaked %q: %q", secret, headers)
+		}
+	}
+	if request.Referer != "https://watch.example.test/video?id=private#player" {
+		t.Fatalf("preflight Referer changed: %q", request.Referer)
+	}
+}
+
+func TestScopedCookieArgUsesSourceDomainAndIsNotAHeader(t *testing.T) {
+	request, err := normalizeRequestWithOrigin(
+		"https://media.example.test/path/master.m3u8?token=private",
+		"https://watch.example.test/video?id=7",
+		"https://watch.example.test",
+		"riflo-test-agent",
+		"session=secret; theme=dark",
+	)
+	if err != nil {
+		t.Fatalf("normalizeRequestWithOrigin() error = %v", err)
+	}
+	headers := strings.Join(request.HeaderArg, "\n")
+	if strings.Contains(strings.ToLower(headers), "cookie:") || strings.Contains(headers, "session=secret") {
+		t.Fatalf("Cookie leaked into generic headers: %q", headers)
+	}
+	cookies := strings.Join(request.CookieArg, "\n")
+	for _, want := range []string{
+		"session=secret; path=/; domain=media.example.test;",
+		"theme=dark; path=/; domain=media.example.test;",
+	} {
+		if !strings.Contains(cookies, want) {
+			t.Fatalf("scoped cookie args missing %q: %q", want, cookies)
 		}
 	}
 }
@@ -320,6 +372,18 @@ func TestHTTPRetryArgsAreBounded(t *testing.T) {
 	probe := fakeExecutable(t, "printf '%s' '{\"format\":{\"duration\":\"1.0\"}}'")
 	ffmpeg := fakeExecutable(t, fmt.Sprintf("printf '%%s\\n' \"$@\" > %s\nfor arg do last=\"$arg\"; done\nprintf 'progress=end\\n'\nprintf media > \"$last\"", shellQuote(argsPath)))
 	runner := NewRunner(probe, ffmpeg)
+	runner.caps = ffmpegcap.Capabilities{
+		Reconnect:               true,
+		ReconnectStreamed:       true,
+		ReconnectOnNetworkError: true,
+		ReconnectOnHTTPError:    true,
+		ReconnectDelayMax:       true,
+		ReconnectMaxRetries:     true,
+		ReconnectDelayTotalMax:  true,
+		RespectRetryAfter:       true,
+		HLSSegmentMaxRetry:      true,
+	}
+	runner.capOnce.Do(func() {})
 	_, err := runner.Download(context.Background(), "task", app.CreateTaskRequest{
 		URL: "https://media.example.test/video.m3u8", OutputDir: t.TempDir(), OutputName: "retry.mp4", Format: "mp4",
 	}, nil)

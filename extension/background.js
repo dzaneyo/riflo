@@ -12,6 +12,16 @@ import { createRequestHeadersStore } from './request-headers.js';
 const store = createCandidateStore(extensionAPI.storage.session);
 const requestHeadersStore = createRequestHeadersStore(extensionAPI.storage.session);
 
+async function isActiveTab(tabId) {
+  if (!Number.isInteger(tabId) || tabId < 0) return false;
+  try {
+    const tabs = await extensionAPI.tabs.query({ active: true, currentWindow: true });
+    return tabs.some((tab) => tab && tab.id === tabId);
+  } catch {
+    return false;
+  }
+}
+
 function updateBadge(tabId, count) {
   if (!Number.isInteger(tabId) || tabId < 0) return Promise.resolve();
   return extensionAPI.action.setBadgeText({
@@ -21,6 +31,7 @@ function updateBadge(tabId, count) {
 }
 
 async function recordCandidate(details, detector = detectHLS, capturedHeaders = null) {
+  if (!await isActiveTab(details?.tabId)) return;
   const detected = detector(details);
   if (!detected) return;
 
@@ -61,10 +72,13 @@ function captureSafeRequestHeaders(details) {
   // .m3u8 requests so normal media segments and XHRs do not cause session
   // storage churn.
   if (!detectHLSRequest(details)) return;
-  const headers = requestHeadersFromDetails(details);
-  if (!headers) return;
-  void requestHeadersStore.remember(details, headers).catch(() => undefined);
-  void recordCandidate(details, detectHLSRequest, headers);
+  void isActiveTab(details?.tabId).then((active) => {
+    if (!active) return;
+    const headers = requestHeadersFromDetails(details);
+    if (!headers) return;
+    return requestHeadersStore.remember(details, headers)
+      .then(() => recordCandidate(details, detectHLSRequest, headers));
+  }).catch(() => undefined);
 }
 
 // Chromium hides Referer and some CORS-sensitive headers unless extraHeaders
